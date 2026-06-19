@@ -1,0 +1,19 @@
+{
+  "port": 3000,
+  "baseUrl": "http://localhost:3000",
+  "checkIntervalMinutes": 30,
+  "smtp": {
+    "host": "smtp.domain.ru",
+    "port": 25,
+    "secure": false,
+    "ignoreTLS": true,
+    "auth": {
+      "user": "some@domain.ru",
+      "pass": "pass"
+    },
+    "from": "some@domain.ru"
+  },
+  "login": "admin",
+  "notificationIntervalHours": 24,
+  "fileDownloadTimeout": 60000
+}

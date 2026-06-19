@@ -1,3 +1,5 @@
+<img width="50" height="50" alt="image" src="https://raw.githubusercontent.com/NoIDXMV6/Redirect_Manager/0f12633b6572590237b9701772fc037b47d1f998/public/favicon.svg" />
+
 # Redirect Manager
 
 Панель управления ссылками и QR-кодами для печатных изданий.

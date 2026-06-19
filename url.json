@@ -1,0 +1,36 @@
+{
+  "tags": [
+    {
+      "id": "mqjlyb3bjdqikh",
+      "name": "Издание 1",
+      "email": "pavel@kozhevatov.ru"
+    },
+    {
+      "id": "mqkkgwixjteaef",
+      "name": "Издание 2",
+      "email": "pavel@kozhevatov.ru"
+    }
+  ],
+  "links": [
+    {
+      "id": "mqjlyjnxj9uneo",
+      "name": "Сайт МЧС",
+      "url": "https://mchs.gov.ru",
+      "tagId": "mqjlyb3bjdqikh",
+      "available": true,
+      "lastChecked": "2026-06-19T12:49:36.282Z",
+      "isFile": false,
+      "lastNotificationSent": null
+    },
+    {
+      "id": "mqkkj62rvzq0hn",
+      "name": "Ссылка в никуда",
+      "url": "https://qwertasdfgzxcvb.xy",
+      "tagId": "mqkkgwixjteaef",
+      "available": false,
+      "lastChecked": "2026-06-19T12:49:36.529Z",
+      "isFile": false,
+      "lastNotificationSent": null
+    }
+  ]
+}

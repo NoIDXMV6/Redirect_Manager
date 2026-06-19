@@ -172,7 +172,7 @@ sudo certbot --nginx -d your-domain.com
 В папке public уже лежит favicon.svg. Вы можете заменить его на свой. Если используете ICO-файл, поместите его как favicon.ico и измените ссылку в index.html.
 
 ## Структура проекта
-
+```test
  .
  ├── server.js           # Основной сервер (Express)
  ├── package.json        # Зависимости и скрипты
@@ -186,12 +186,12 @@ sudo certbot --nginx -d your-domain.com
  │   └── favicon.svg     # Иконка сайта
  ├── redirects/          # Сгенерированные редиректы и заглушки
  │   └── {имя_тега}/
- │    └── {id_ссылки}/
- │     ├── redirect.html # HTML-редирект на URL
- │     └── index.html    # HTML-заглушка (если недоступен)
- └── uploads/            # Загруженные изображения для редактора
-  └── {id_ссылки или global}/
-
+ │      └── {id_ссылки}/
+ │         ├── redirect.html     # HTML-редирект на URL
+ │         └── index.html        # HTML-заглушка (если недоступен)
+ └── uploads/                    # Загруженные изображения для редактора
+     └── {id_ссылки или global}/
+```
 ## Безопасность
 
 - Пароль хранится в виде bcrypt-хеша в config.json.

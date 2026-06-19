@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <title>Панель управления ссылками</title>
+  <link rel="stylesheet" href="/style.css">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+  <!-- Jodit Editor -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/jodit@4.2.15/es2021/jodit.min.css">
+  <script src="https://cdn.jsdelivr.net/npm/jodit@4.2.15/es2021/jodit.min.js"></script>
+</head>
+<body>
+  <div id="app">
+    <!-- Форма авторизации -->
+    <div id="loginForm">
+      <h2>Авторизация</h2>
+      <div class="form-group">
+        <label>Логин</label>
+        <input type="text" id="loginInput" value="admin">
+      </div>
+      <div class="form-group">
+        <label>Пароль</label>
+        <input type="password" id="passwordInput" value="password">
+      </div>
+      <button id="loginBtn" class="btn btn-primary">Войти</button>
+      <div id="loginError" class="error-msg"></div>
+    </div>
+
+    <!-- Панель управления -->
+    <div id="dashboard" class="hidden">
+      <h1>Панель управления ссылками</h1>
+      <div class="toolbar">
+        <button class="btn btn-primary" id="checkAllBtn">Проверить все ссылки</button>
+        <button class="btn btn-secondary" id="exportDataBtn">Экспорт JSON</button>
+        <button class="btn btn-secondary" id="importDataBtn">Импорт JSON</button>
+        <input type="file" id="importFile" accept=".json" style="display:none">
+        <button class="btn btn-secondary" id="editTemplateBtn">✎ Редактировать шаблон заглушки</button>
+        <button class="btn btn-secondary" id="changePasswordBtn">🔑 Сменить пароль</button>
+        <button class="btn btn-secondary" id="settingsBtn">⚙ Настройки</button>
+        <button class="btn btn-danger" id="logoutBtn">Выйти</button>
+      </div>
+
+      <div class="dashboard-content">
+        <div class="sidebar">
+          <div class="card">
+            <div class="card-header">
+              <h3>Теги</h3>
+              <button class="btn btn-primary btn-sm" id="addTagBtn">+</button>
+            </div>
+            <ul class="tag-list" id="tagList"></ul>
+          </div>
+        </div>
+        <div class="main">
+          <div class="card">
+            <div class="card-header">
+              <h3 id="currentTagTitle">Выберите тег</h3>
+              <button class="btn btn-success btn-sm" id="addLinkBtn">+ Добавить ссылку</button>
+            </div>
+            <ul class="link-list" id="linkList"></ul>
+            <div id="noLinksMessage" class="text-center muted">Нет ссылок для выбранного тега</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Модалки -->
+    <!-- Тег -->
+    <div id="tagModal" class="modal hidden">
+      <div class="modal-content">
+        <span class="modal-close" data-modal="tagModal">&times;</span>
+        <h3 id="tagModalTitle">Добавить тег</h3>
+        <div class="form-group">
+          <label>Название тега</label>
+          <input type="text" id="tagNameInput" placeholder="Введите название">
+        </div>
+        <div class="form-group">
+          <label>Email для уведомлений</label>
+          <input type="email" id="tagEmailInput" placeholder="email@example.com">
+        </div>
+        <input type="hidden" id="tagEditId">
+        <button class="btn btn-primary" id="saveTagBtn">Сохранить</button>
+        <button class="btn btn-secondary" data-modal="tagModal">Отмена</button>
+      </div>
+    </div>
+
+<!-- Ссылка -->
+<div id="linkModal" class="modal hidden">
+  <div class="modal-content">
+    <span class="modal-close" data-modal="linkModal">&times;</span>
+    <h3 id="linkModalTitle">Добавить ссылку</h3>
+    <div class="form-group">
+      <label>Имя ссылки</label>
+      <input type="text" id="linkNameInput" placeholder="Например: Документация">
+    </div>
+    <div class="form-group">
+      <label>URL</label>
+      <input type="url" id="linkUrlInput" placeholder="https://example.com">
+    </div>
+    <div class="form-group">
+      <label>Тег</label>
+      <select id="linkTagSelect"></select>
+    </div>
+    <div class="form-group checkbox-group">
+      <input type="checkbox" id="linkIsFile">
+      <label for="linkIsFile">Это файл (кэшировать локально)</label>
+    </div>
+    <input type="hidden" id="linkEditId">
+    <button class="btn btn-primary" id="saveLinkBtn">Сохранить</button>
+    <button class="btn btn-secondary" data-modal="linkModal">Отмена</button>
+  </div>
+</div>
+
+    <!-- QR -->
+    <div id="qrModal" class="modal hidden">
+      <div class="modal-content">
+        <span class="modal-close" data-modal="qrModal">&times;</span>
+        <h3>QR-код для ссылки</h3>
+        <div class="qr-container">
+          <div id="qrcode"></div>
+        </div>
+        <div class="flex" style="justify-content:center; gap:10px;">
+          <button class="btn btn-success" id="downloadQrBtn">Скачать QR (PNG)</button>
+          <button class="btn btn-primary" id="downloadHtmlBtn">Скачать HTML-редирект</button>
+        </div>
+        <p style="font-size:12px; color:#777; margin-top:10px;">
+          Ссылка для редиректа: <span id="redirectUrlDisplay" style="word-break:break-all;"></span>
+        </p>
+      </div>
+    </div>
+
+    <!-- Редактор глобального шаблона -->
+    <div id="templateModal" class="modal hidden">
+      <div class="modal-content" style="max-width: 900px;">
+        <span class="modal-close" data-modal="templateModal">&times;</span>
+        <h3>Редактирование шаблона заглушки</h3>
+        <p style="font-size:12px; color:#777;">
+          Используйте плейсхолдеры <code>{{link.name}}</code> и <code>{{link.url}}</code> для подстановки данных ссылки.
+        </p>
+        <textarea id="templateEditor" style="width:100%; height:400px; display:none;"></textarea>
+        <div style="margin-top:15px; display:flex; gap:10px;">
+          <button class="btn btn-primary" id="saveTemplateBtn">Сохранить</button>
+          <button class="btn btn-secondary" data-modal="templateModal">Отмена</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Редактор заглушки для конкретной ссылки -->
+    <div id="stubModal" class="modal hidden">
+      <div class="modal-content" style="max-width: 900px;">
+        <span class="modal-close" data-modal="stubModal">&times;</span>
+        <h3 id="stubModalTitle">Редактирование заглушки</h3>
+        <textarea id="stubEditor" style="width:100%; height:400px; display:none;"></textarea>
+        <div style="margin-top:15px; display:flex; gap:10px;">
+          <button class="btn btn-primary" id="saveStubBtn">Сохранить</button>
+          <button class="btn btn-secondary" data-modal="stubModal">Отмена</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Модалка смены пароля -->
+    <div id="passwordModal" class="modal hidden">
+      <div class="modal-content" style="max-width:400px;">
+        <span class="modal-close" data-modal="passwordModal">&times;</span>
+        <h3>Смена пароля</h3>
+        <div class="form-group">
+          <label>Текущий пароль</label>
+          <input type="password" id="currentPasswordInput">
+        </div>
+        <div class="form-group">
+          <label>Новый пароль</label>
+          <input type="password" id="newPasswordInput">
+        </div>
+        <div class="form-group">
+          <label>Подтверждение</label>
+          <input type="password" id="newPasswordConfirmInput">
+        </div>
+        <div id="passwordError" class="error-msg"></div>
+        <button class="btn btn-primary" id="savePasswordBtn">Сохранить</button>
+        <button class="btn btn-secondary" data-modal="passwordModal">Отмена</button>
+      </div>
+    </div>
+
+    <!-- Модалка настроек -->
+
+<!-- Модалка настроек -->
+<div id="settingsModal" class="modal hidden">
+  <div class="modal-content" style="max-width:600px;">
+    <span class="modal-close" data-modal="settingsModal">&times;</span>
+    <h3>Настройки панели</h3>
+    <div class="form-group">
+      <label>Base URL (для редиректов)</label>
+      <input type="text" id="settingsBaseUrl" placeholder="https://example.com">
+    </div>
+    <div class="form-group">
+      <label>Интервал проверки (минуты)</label>
+      <input type="number" id="settingsCheckInterval" value="60">
+    </div>
+    <div class="form-group">
+      <label>Интервал повторных уведомлений (часы)</label>
+      <input type="number" id="settingsNotificationInterval" value="24">
+      <small style="color:#999; display:block; margin-top:4px;">Минимальный интервал между повторными письмами для одной ссылки</small>
+    </div>
+    <hr>
+    <h4>SMTP Настройки</h4>
+    <div class="form-group">
+      <label>Хост</label>
+      <input type="text" id="settingsSmtpHost" placeholder="smtp.example.com">
+    </div>
+    <div class="form-group">
+      <label>Порт</label>
+      <input type="number" id="settingsSmtpPort" value="587">
+    </div>
+    <div class="form-group checkbox-group">
+      <input type="checkbox" id="settingsSmtpSecure">
+      <label for="settingsSmtpSecure">Использовать SSL/TLS</label>
+    </div>
+    <div class="form-group checkbox-group">
+      <input type="checkbox" id="settingsSmtpIgnoreTLS">
+        <label for="settingsSmtpIgnoreTLS">Игнорировать ошибки TLS/SSL (для отладки)</label>
+    </div>
+    <div class="form-group">
+      <label>Пользователь</label>
+      <input type="text" id="settingsSmtpUser">
+    </div>
+    <div class="form-group">
+      <label>Пароль</label>
+      <input type="password" id="settingsSmtpPass">
+    </div>
+    <div class="form-group">
+      <label>Email отправителя</label>
+      <input type="email" id="settingsSmtpFrom" placeholder="noreply@example.com">
+    </div>
+    <div class="form-group">
+      <label>Email для тестового письма</label>
+      <input type="email" id="testEmailInput" placeholder="admin@example.com">
+    </div>
+
+    <div style="margin-top:15px; display:flex; gap:10px; flex-wrap:wrap;">
+      <button class="btn btn-primary" id="saveSettingsBtn">Сохранить</button>
+      <button class="btn btn-secondary" id="testEmailBtn">📧 Отправить тестовое письмо</button>
+      <button class="btn btn-secondary" data-modal="settingsModal">Отмена</button>
+    </div>
+  </div>
+<!-- Модалка результата тестового письма -->
+<div id="testResultModal" class="modal hidden">
+  <div class="modal-content" style="max-width:600px;">
+    <span class="modal-close" data-modal="testResultModal">&times;</span>
+    <h3>Результат отправки тестового письма</h3>
+    <div id="testResultContent" style="margin:15px 0; padding:10px; background:#f8f9fa; border-radius:4px; max-height:300px; overflow:auto; white-space:pre-wrap; font-family:monospace; font-size:13px;"></div>
+    <button class="btn btn-secondary" data-modal="testResultModal">Закрыть</button>
+  </div>
+</div>
+</div>
+
+  <script src="/main.js"></script>
+</body>
+</html>

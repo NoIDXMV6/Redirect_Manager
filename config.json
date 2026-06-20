@@ -3,34 +3,31 @@
   "baseUrl": "http://localhost:3000",
   "checkIntervalMinutes": 30,
   "smtp": {
-    "host": "smtp.kozhevatov.ru",
+    "host": "smtp.domain.ru",
     "port": 25,
     "secure": false,
     "ignoreTLS": true,
     "auth": {
-      "user": "services@kozhevatov.ru",
-      "pass": "Serv1ce$"
+      "user": "services@domain.ru",
+      "pass": "pass"
     },
-    "from": "services@kozhevatov.ru"
+    "from": "services@domain.ru"
   },
   "login": "admin",
   "notificationIntervalHours": 2,
   "fileDownloadTimeout": 60000,
   "users": {
     "admin": {
-      "passwordHash": "$2b$10$Bv2VeiknbjFMbnJqr7lxh.i7vC96tIgd4Vro94hMrLUSPkEa/D8u2",
       "role": "admin"
     },
     "guest": {
-      "passwordHash": "$2b$10$8WIVF96XHGahr7gDwKe7ruMVXpJY8Zjl6a608araIAFWlx8HyheIa",
       "role": "guest"
     },
     "manager": {
-      "passwordHash": "$2b$10$nPwY154heqhlEizjjFN0oe7dZg2W181Tq2fclyOHQESjmyDwHQ6hK",
       "role": "user"
     }
   },
-  "adminEmail": "pavel@kozhevatov.ru",
+  "adminEmail": "user@domain.ru",
   "backupIntervalHours": 24,
   "backupRetentionDays": 7,
   "emailTemplates": {

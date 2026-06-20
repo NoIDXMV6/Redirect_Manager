@@ -4,7 +4,8 @@
 
 Панель управления ссылками и QR-кодами для печатных изданий.
 
-<img width="1150" height="561" alt="Screenshot_24" src="https://github.com/user-attachments/assets/0c5d5de2-9b0d-4909-9a18-89e0113aee95" />
+<img width="1217" height="555" alt="Screenshot_3" src="https://github.com/user-attachments/assets/4ed28d44-f5f8-497d-9e61-d9e609186802" />
+
 
 
 ## Описание

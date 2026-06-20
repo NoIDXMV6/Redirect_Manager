@@ -428,12 +428,12 @@ async function downloadFile(link, metadata) {
     });
 
     if (response.status === 304) {
-      console.log(`Файл ${link.name} не изменился (304)`);
+//      console.log(`Файл ${link.name} не изменился (304)`);
       return { status: 'not_modified' };
     }
 
     if (!response.ok) {
-      console.log(`Ошибка скачивания ${link.name}: ${response.status}`);
+//      console.log(`Ошибка скачивания ${link.name}: ${response.status}`);
       return { status: 'error', statusCode: response.status };
     }
 
@@ -452,7 +452,7 @@ async function downloadFile(link, metadata) {
       downloadedAt: new Date().toISOString()
     };
     fs.writeFileSync(metadataPath, JSON.stringify(newMetadata, null, 2));
-    console.log(`Файл ${link.name} скачан успешно`);
+//    console.log(`Файл ${link.name} скачан успешно`);
     return { status: 'downloaded', metadata: newMetadata };
   } catch (err) {
     console.error('Ошибка скачивания файла:', err);
@@ -461,9 +461,9 @@ async function downloadFile(link, metadata) {
 }
 
 // --- Отправка email ---
-async function sendEmail(to, subject, text) {
+async function sendEmail(to, subject, htmlBody) {
   if (!config.smtp || !config.smtp.auth || !config.smtp.auth.user) {
-    console.log(`[EMAIL] To: ${to}, Subject: ${subject}, Text: ${text}`);
+    console.log(`[EMAIL] To: ${to}, Subject: ${subject}, Text: ${htmlBody}`);
     return;
   }
   try {
@@ -475,7 +475,7 @@ async function sendEmail(to, subject, text) {
       from: config.smtp.from || 'noreply@example.com',
       to,
       subject,
-      text
+      html: htmlBody  // <-- изменено с text на html
     });
     console.log(`✅ Email отправлен на ${to}`);
   } catch (e) {
@@ -512,31 +512,63 @@ async function sendEmailWithAttachment(to, subject, body, attachmentPath, filena
 
 // --- Отправка группового уведомления о недоступных ссылках ---
 async function sendUnavailableNotification(tag, unavailableLinks) {
-  if (!tag || !tag.email) return;
-  
-  const template = config.emailTemplates.unavailable;
-  const subject = template.subject.replace('{{tag.name}}', tag.name);
-  
-  let linksHtml = '';
-  for (const link of unavailableLinks) {
-    const status = link.lastStatus || 'неизвестно';
-    linksHtml += `<li><strong>${link.name}</strong> — <a href="${link.url}">${link.url}</a> (статус: ${status})</li>`;
-  }
-  
-  let body = template.body.replace('{{#each links}}', '').replace('{{/each}}', '');
-  body = body.replace('{{#each links}}', linksHtml);
-  
-  const recipients = [tag.email];
-  if (config.adminEmail && config.adminEmail !== tag.email) {
-    recipients.push(config.adminEmail);
-  }
-  
-  for (const recipient of recipients) {
-    try {
-      await sendEmail(recipient, subject, body);
-    } catch (e) {
-      console.error(`Ошибка отправки уведомления на ${recipient}:`, e);
+  try {
+    if (!tag || !tag.email) return;
+
+    const template = config.emailTemplates.unavailable;
+    if (!template) return;
+
+    let subject = template.subject.replace(/\{\{tag\.name\}\}/g, tag.name);
+
+    let linksHtml = '';
+    for (const link of unavailableLinks) {
+      const status = link.lastStatus || 'неизвестно';
+      let statusText = status;
+
+      // Проверяем, является ли ссылка файлом и есть ли локальная копия
+      if (link.isFile) {
+        try {
+          const folder = getLinkFolder(link);
+          const originalFileName = path.basename(new URL(link.url).pathname) || 'file';
+          const filePath = path.join(folder, originalFileName);
+          const hasLocalCopy = fs.existsSync(filePath);
+
+          if (hasLocalCopy) {
+            // Если есть локальная копия, сообщаем об этом
+            statusText = `локальная копия (оригинал недоступен, ошибка: ${status})`;
+          } else {
+            // Если нет локальной копии, показываем статус оригинального запроса
+            statusText = `оригинал недоступен (${status})`;
+          }
+        } catch (e) {
+          // Если не удалось проверить папку, используем исходный статус
+          statusText = status;
+        }
+      }
+
+      linksHtml += `<li><strong>${link.name}</strong> — <a href="${link.url}">${link.url}</a> (статус: ${statusText})</li>`;
     }
+
+    let body = template.body.replace(/\{\{#each links\}\}[\s\S]*?\{\{\/each\}\}/g, linksHtml);
+    body = body.replace(/\{\{tag\.name\}\}/g, tag.name);
+    body = body.replace(/\{\{this\.name\}\}/g, '');
+    body = body.replace(/\{\{this\.url\}\}/g, '');
+    body = body.replace(/\{\{this\.status\}\}/g, '');
+
+    const recipients = [tag.email];
+    if (config.adminEmail && config.adminEmail !== tag.email) {
+      recipients.push(config.adminEmail);
+    }
+
+    for (const recipient of recipients) {
+      try {
+        await sendEmail(recipient, subject, body);
+      } catch (e) {
+        console.error(`❌ Ошибка отправки уведомления на ${recipient}:`, e.message);
+      }
+    }
+  } catch (e) {
+    console.error('❌ Ошибка в sendUnavailableNotification:', e.message);
   }
 }
 
@@ -629,81 +661,122 @@ async function cleanupOldBackups() {
 
 // --- Проверка доступности ---
 async function checkLinkAvailability(link) {
-  if (link.isFile) {
-    const folder = getLinkFolder(link);
-    const metadataPath = path.join(folder, 'metadata.json');
-    let metadata = null;
-    if (fs.existsSync(metadataPath)) {
-      try {
-        metadata = JSON.parse(fs.readFileSync(metadataPath, 'utf8'));
-      } catch (e) {}
-    }
-    const result = await downloadFile(link, metadata);
-    if (result.status === 'downloaded' || result.status === 'not_modified') {
-      link.available = true;
-    } else {
+  try {
+    if (link.isFile) {
       const folder = getLinkFolder(link);
-      const originalFileName = path.basename(new URL(link.url).pathname) || 'file';
-      const filePath = path.join(folder, originalFileName);
-      if (fs.existsSync(filePath)) {
-        link.available = true;
+      const metadataPath = path.join(folder, 'metadata.json');
+      let metadata = null;
+      if (fs.existsSync(metadataPath)) {
+        try {
+          metadata = JSON.parse(fs.readFileSync(metadataPath, 'utf8'));
+        } catch (e) {}
+      }
+
+      let result;
+      try {
+        result = await downloadFile(link, metadata);
+      } catch (err) {
+        const originalFileName = path.basename(new URL(link.url).pathname) || 'file';
+        const filePath = path.join(folder, originalFileName);
+        const hasLocalCopy = fs.existsSync(filePath);
+        if (hasLocalCopy) {
+          return { ok: true, status: 200, source: 'local', error: err.message };
+        } else {
+          return { ok: false, status: 404, source: 'error', error: err.message };
+        }
+      }
+
+      if (result.status === 'downloaded' || result.status === 'not_modified') {
+        return { ok: true, status: 200, source: 'original' };
       } else {
-        link.available = false;
+        const originalFileName = path.basename(new URL(link.url).pathname) || 'file';
+        const filePath = path.join(folder, originalFileName);
+        const hasLocalCopy = fs.existsSync(filePath);
+        if (hasLocalCopy) {
+          return { ok: true, status: 200, source: 'local', error: result.error };
+        } else {
+          return { ok: false, status: result.statusCode || 404, source: 'error', error: result.error };
+        }
+      }
+    } else {
+      try {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 5000);
+        const response = await fetch(link.url, {
+          method: 'HEAD',
+          signal: controller.signal
+        });
+        clearTimeout(timeout);
+        return { ok: response.ok, status: response.status, source: 'original' };
+      } catch (err) {
+        return { ok: false, status: 0, source: 'error', error: err.message };
       }
     }
-    link.lastChecked = new Date().toISOString();
-    return { ok: link.available, status: result.statusCode || (link.available ? 200 : 404) };
-  } else {
-    try {
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 5000);
-      const response = await fetch(link.url, {
-        method: 'HEAD',
-        signal: controller.signal
-      });
-      clearTimeout(timeout);
-      return { ok: response.ok, status: response.status };
-    } catch (err) {
-      return { ok: false, status: 0, error: err.message };
-    }
+  } catch (err) {
+    return { ok: false, status: 0, source: 'error', error: err.message };
   }
 }
 
 // --- Проверка всех ссылок ---
 async function checkAllLinks() {
-  console.log('Запущена периодическая проверка ссылок...');
+  console.log('🔄 Запущена проверка доступности ссылок...');
   const results = [];
   const tagUnavailable = {};
-  
+
   for (const link of data.links) {
-    const status = await checkLinkAvailability(link);
-    const wasAvailable = link.available;
-    link.available = status.ok;
-    link.lastChecked = new Date().toISOString();
-    link.lastStatus = status.status || 'unknown';
+    try {
+      const status = await checkLinkAvailability(link);
+      const wasAvailable = link.available;
+      link.available = status.ok;
+      link.lastChecked = new Date().toISOString();
+      link.lastStatus = status.status || 'unknown';
 
-    if (!link.isFile) {
-      generateRedirectFile(link);
+      if (!link.isFile) {
+        generateRedirectFile(link);
+      }
+
+      if (!status.ok) {
+        if (!tagUnavailable[link.tagId]) {
+          tagUnavailable[link.tagId] = [];
+        }
+        tagUnavailable[link.tagId].push(link);
+      }
+      // Если ссылка недоступна или используется локальная копия — отправляем уведомление
+     if (!status.ok) {
+	  if (!tagUnavailable[link.tagId]) {
+	    tagUnavailable[link.tagId] = [];
+	  }
+	  // Проверяем, есть ли уже эта ссылка в массиве
+	  const exists = tagUnavailable[link.tagId].some(l => l.id === link.id);
+	  if (!exists) {
+	    tagUnavailable[link.tagId].push(link);
+	  }
     }
-
-    if (!link.available && status.status >= 400) {
+      results.push({ linkId: link.id, available: link.available, status: status.status });
+    } catch (err) {
+      console.error(`❌ Ошибка при проверке ссылки ${link.name}:`, err.message);
+      link.available = false;
+      link.lastChecked = new Date().toISOString();
+      link.lastStatus = 'error';
       if (!tagUnavailable[link.tagId]) {
         tagUnavailable[link.tagId] = [];
       }
       tagUnavailable[link.tagId].push(link);
+      results.push({ linkId: link.id, available: false, status: 0 });
     }
-
-    results.push({ linkId: link.id, available: link.available, status: status.status });
   }
 
-  for (const [tagId, links] of Object.entries(tagUnavailable)) {
-    const tag = getTagById(tagId);
-    if (tag && tag.email) {
-      await sendUnavailableNotification(tag, links);
+  if (Object.keys(tagUnavailable).length > 0) {
+    for (const [tagId, links] of Object.entries(tagUnavailable)) {
+      const tag = getTagById(tagId);
+      if (tag && tag.email) {
+        await sendUnavailableNotification(tag, links);
+      }
     }
   }
 
   saveData();
+  console.log('✅ Проверка завершена');
   return results;
 }
 

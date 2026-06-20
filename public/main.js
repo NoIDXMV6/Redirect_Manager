@@ -43,6 +43,7 @@
   const linkIsFile = $('#linkIsFile');
   const saveLinkBtn = $('#saveLinkBtn');
 
+  const qrModal = $('#qrModal');
   const qrContainer = $('#qrcode');
   const redirectUrlDisplay = $('#redirectUrlDisplay');
   const downloadQrBtn = $('#downloadQrBtn');
@@ -50,6 +51,8 @@
 
   const testResultModal = $('#testResultModal');
   const testResultContent = $('#testResultContent');
+
+  const helpBtn = $('#helpBtn');
 
   // Глобальный шаблон (Jodit)
   const editTemplateBtn = $('#editTemplateBtn');
@@ -63,16 +66,19 @@
   const stubEditor = $('#stubEditor');
   const saveStubBtn = $('#saveStubBtn');
 
-  // Смена пароля
+  // Смена пароля (текущего пользователя)
   const changePasswordBtn = $('#changePasswordBtn');
   const passwordModal = $('#passwordModal');
   const currentPasswordInput = $('#currentPasswordInput');
   const newPasswordInput = $('#newPasswordInput');
   const newPasswordConfirmInput = $('#newPasswordConfirmInput');
-  const savePasswordBtn = $('#savePasswordBtn');
+  const saveCurrentPasswordBtn = $('#saveCurrentPasswordBtn');
   const passwordError = $('#passwordError');
 
-  // Настройки (добавлены новые поля)
+  // Смена пароля пользователя (администратором)
+  const saveUserPasswordBtn = $('#saveUserPasswordBtn');
+
+  // Настройки
   const settingsBtn = $('#settingsBtn');
   const settingsModal = $('#settingsModal');
   const settingsBaseUrl = $('#settingsBaseUrl');
@@ -89,6 +95,32 @@
   const testEmailInput = $('#testEmailInput');
   const testEmailBtn = $('#testEmailBtn');
 
+  // Новые поля настроек
+  const settingsAdminEmail = $('#settingsAdminEmail');
+  const settingsBackupInterval = $('#settingsBackupInterval');
+  const settingsBackupRetention = $('#settingsBackupRetention');
+
+  // Управление пользователями
+  const usersBtn = $('#usersBtn');
+  const usersModal = $('#usersModal');
+  const usersList = $('#usersList');
+  const newUserLogin = $('#newUserLogin');
+  const newUserPassword = $('#newUserPassword');
+  const newUserRole = $('#newUserRole');
+  const addUserBtn = $('#addUserBtn');
+
+  // Шаблоны писем
+  const emailTemplatesBtn = $('#emailTemplatesBtn');
+  const emailTemplatesModal = $('#emailTemplatesModal');
+  const unavailableSubject = $('#unavailableSubject');
+  const unavailableBody = $('#unavailableBody');
+  const backupSubject = $('#backupSubject');
+  const backupBody = $('#backupBody');
+  const saveTemplatesBtn = $('#saveTemplatesBtn');
+
+  // Бэкап
+  const backupNowBtn = $('#backupNowBtn');
+
   // Jodit экземпляры
   let stubJoditInstance = null;
   let templateJoditInstance = null;
@@ -99,6 +131,53 @@
   let currentLinkIdForQr = null;
   let tags = [];
   let links = [];
+
+  // --- Применение ограничений по роли ---
+  function applyRoleRestrictions(role) {
+    const isAdmin = role === 'admin';
+    const isUser = role === 'admin' || role === 'user';
+    const isGuest = role === 'guest';
+
+    // 1. Админские кнопки (только админ)
+    document.querySelectorAll('.admin-only').forEach(el => {
+      if (isAdmin) {
+        el.classList.remove('hidden');
+      } else {
+        el.classList.add('hidden');
+      }
+    });
+
+    // 2. Кнопки для пользователей (админ + user)
+    document.querySelectorAll('.user-only').forEach(el => {
+      if (isUser) {
+        el.classList.remove('hidden');
+      } else {
+        el.classList.add('hidden');
+      }
+    });
+
+    // 3. Кнопки управления (скрыть для гостя)
+    const actionSelectors = [
+      '#addTagBtn',          // кнопка "Добавить тег"
+      '#addLinkBtn',         // кнопка "Добавить ссылку"
+      '.edit-tag-btn',       // кнопка редактирования тега
+      '.delete-tag-btn',     // кнопка удаления тега
+      '.edit-link-btn',      // кнопка редактирования ссылки
+      '.delete-link-btn',    // кнопка удаления ссылки
+      '.edit-stub-btn',      // кнопка редактирования заглушки
+      '.show-qr-btn',        // кнопка "QR" (опционально)
+      '.check-link-btn'      // кнопка "Проверить" (опционально)
+    ];
+    actionSelectors.forEach(selector => {
+      document.querySelectorAll(selector).forEach(el => {
+        if (isGuest) {
+          el.classList.add('hidden');
+        } else {
+          el.classList.remove('hidden');
+        }
+      });
+    });
+  }
 
   // --- API helpers ---
   async function apiFetch(url, options = {}) {
@@ -128,6 +207,9 @@
         loginForm.classList.add('hidden');
         dashboard.classList.remove('hidden');
         loginError.textContent = '';
+        window.userRole = result.role || 'guest';
+        console.log('applyRoleRestrictions вызвана с ролью:', window.userRole);
+        applyRoleRestrictions(window.userRole);
         loadData();
       } else {
         loginError.textContent = 'Неверный логин или пароль';
@@ -181,8 +263,18 @@
       const li = document.createElement('li');
       li.dataset.id = tag.id;
       if (tag.id === currentTagId) li.classList.add('active');
+
+      const unavailableCount = links.filter(l => l.tagId === tag.id && !l.available).length;
+      const alarmHtml = unavailableCount > 0 ? `<div class="alarm-badge-top">⚠️ Недоступно: ${unavailableCount}</div>` : '';
+
       li.innerHTML = `
-        <span><strong>${tag.name}</strong> <span class="tag-email">(${tag.email})</span></span>
+        <span style="display:flex; flex-direction:column; align-items:flex-start;">
+          ${alarmHtml}
+          <div>
+            <strong>${tag.name}</strong>
+            <span class="tag-email">(${tag.email})</span>
+          </div>
+        </span>
         <div>
           <button class="btn btn-primary btn-sm edit-tag-btn" data-id="${tag.id}">✎</button>
           <button class="btn btn-danger btn-sm delete-tag-btn" data-id="${tag.id}">✕</button>
@@ -207,6 +299,7 @@
         if (confirm('Удалить тег и все его ссылки?')) deleteTag(id);
       });
     });
+    applyRoleRestrictions(window.userRole || 'guest');
   }
 
   function renderLinks() {
@@ -290,6 +383,7 @@
         if (confirm('Удалить ссылку?')) deleteLink(id);
       });
     });
+    applyRoleRestrictions(window.userRole || 'guest');
   }
 
   function renderAll() {
@@ -723,7 +817,7 @@
 
   saveStubBtn.addEventListener('click', saveStub);
 
-  // --- Смена пароля ---
+  // --- Смена пароля текущего пользователя (из панели) ---
   changePasswordBtn.addEventListener('click', () => {
     passwordModal.classList.remove('hidden');
     currentPasswordInput.value = '';
@@ -732,7 +826,7 @@
     passwordError.textContent = '';
   });
 
-  savePasswordBtn.addEventListener('click', async () => {
+  saveCurrentPasswordBtn.addEventListener('click', async () => {
     const current = currentPasswordInput.value.trim();
     const newPass = newPasswordInput.value.trim();
     const confirm = newPasswordConfirmInput.value.trim();
@@ -777,6 +871,9 @@
       settingsSmtpPass.value = config.smtp?.auth?.pass || '';
       settingsSmtpFrom.value = config.smtp?.from || '';
       settingsSmtpIgnoreTLS.checked = config.smtp?.ignoreTLS || false;
+      settingsAdminEmail.value = config.adminEmail || '';
+      settingsBackupInterval.value = config.backupIntervalHours || 24;
+      settingsBackupRetention.value = config.backupRetentionDays || 7;
     } catch (e) {
       alert('Не удалось загрузить настройки: ' + e.message);
     }
@@ -792,6 +889,9 @@
       baseUrl: settingsBaseUrl.value.trim(),
       checkIntervalMinutes: parseInt(settingsCheckInterval.value) || 60,
       notificationIntervalHours: parseInt(settingsNotificationInterval.value) || 24,
+      adminEmail: settingsAdminEmail.value.trim(),
+      backupIntervalHours: parseInt(settingsBackupInterval.value) || 24,
+      backupRetentionDays: parseInt(settingsBackupRetention.value) || 7,
       smtp: {
         host: settingsSmtpHost.value.trim(),
         port: parseInt(settingsSmtpPort.value) || 587,
@@ -818,58 +918,293 @@
 
   // --- Тестовое письмо ---
   testEmailBtn.addEventListener('click', async () => {
-  const email = testEmailInput.value.trim();
-  if (!email) {
-    alert('Введите email получателя');
-    return;
+    const email = testEmailInput.value.trim();
+    if (!email) {
+      alert('Введите email получателя');
+      return;
+    }
+
+    // 1. Сохраняем настройки
+    try {
+      const config = {
+        baseUrl: settingsBaseUrl.value.trim(),
+        checkIntervalMinutes: parseInt(settingsCheckInterval.value) || 60,
+        notificationIntervalHours: parseInt(settingsNotificationInterval.value) || 24,
+        adminEmail: settingsAdminEmail.value.trim(),
+        backupIntervalHours: parseInt(settingsBackupInterval.value) || 24,
+        backupRetentionDays: parseInt(settingsBackupRetention.value) || 7,
+        smtp: {
+          host: settingsSmtpHost.value.trim(),
+          port: parseInt(settingsSmtpPort.value) || 587,
+          secure: settingsSmtpSecure.checked,
+          ignoreTLS: settingsSmtpIgnoreTLS.checked,
+          auth: {
+            user: settingsSmtpUser.value.trim(),
+            pass: settingsSmtpPass.value.trim()
+          },
+          from: settingsSmtpFrom.value.trim()
+        }
+      };
+
+      await apiFetch('/api/config', {
+        method: 'PUT',
+        body: config
+      });
+    } catch (e) {
+      alert('Ошибка сохранения настроек: ' + e.message);
+      return;
+    }
+
+    // 2. Отправляем тестовое письмо
+    try {
+      const result = await apiFetch('/api/test-email', {
+        method: 'POST',
+        body: { to: email }
+      });
+      if (result.success) {
+        testResultContent.innerHTML = '✅ ' + result.message;
+      } else {
+        testResultContent.innerHTML = '❌ ' + result.message + '\n\nДетали:\n' + (result.details || 'Нет дополнительной информации');
+      }
+      testResultModal.classList.remove('hidden');
+    } catch (e) {
+      testResultContent.innerHTML = '❌ Ошибка запроса: ' + e.message;
+      testResultModal.classList.remove('hidden');
+    }
+  });
+
+  // --- Управление пользователями ---
+  async function loadUsers() {
+    try {
+      const users = await apiFetch('/api/users');
+      usersList.innerHTML = '';
+      if (!users || users.length === 0) {
+        usersList.innerHTML = '<p style="color:#999;">Нет пользователей</p>';
+        return;
+      }
+      const roleLabels = { admin: 'Администратор', user: 'Пользователь', guest: 'Гость' };
+      users.forEach(user => {
+        const div = document.createElement('div');
+        div.style.cssText = 'display:flex; justify-content:space-between; align-items:center; padding:8px 0; border-bottom:1px solid #eee;';
+        div.innerHTML = `
+          <span><strong>${user.login}</strong> (${roleLabels[user.role] || user.role})</span>
+          <div>
+            <button class="btn btn-primary btn-sm edit-user-role-btn" data-login="${user.login}" data-role="${user.role}">✎</button>
+            <button class="btn btn-warning btn-sm change-user-password-btn" data-login="${user.login}">🔑</button>
+            ${user.login !== 'admin' ? `<button class="btn btn-danger btn-sm delete-user-btn" data-login="${user.login}">✕</button>` : ''}
+          </div>
+        `;
+        usersList.appendChild(div);
+      });
+
+      // Обработчики для кнопок
+      document.querySelectorAll('.edit-user-role-btn').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          const login = btn.dataset.login;
+          const role = btn.dataset.role;
+          openEditUserModal(login, role);
+        });
+      });
+
+      document.querySelectorAll('.change-user-password-btn').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          const login = btn.dataset.login;
+          openChangePasswordModal(login);
+        });
+      });
+
+      document.querySelectorAll('.delete-user-btn').forEach(btn => {
+        btn.addEventListener('click', async (e) => {
+          e.stopPropagation();
+          const login = btn.dataset.login;
+          if (!confirm(`Удалить пользователя ${login}?`)) return;
+          try {
+            await apiFetch(`/api/users/${login}`, { method: 'DELETE' });
+            alert('Пользователь удалён');
+            loadUsers();
+          } catch (err) {
+            alert('Ошибка удаления: ' + err.message);
+          }
+        });
+      });
+    } catch (e) {
+      alert('Ошибка загрузки пользователей: ' + e.message);
+    }
   }
 
-  // 1. Сначала сохраняем настройки (как при нажатии "Сохранить")
-  try {
-    const config = {
-      baseUrl: settingsBaseUrl.value.trim(),
-      checkIntervalMinutes: parseInt(settingsCheckInterval.value) || 60,
-      notificationIntervalHours: parseInt(settingsNotificationInterval.value) || 24,
-      smtp: {
-        host: settingsSmtpHost.value.trim(),
-        port: parseInt(settingsSmtpPort.value) || 587,
-        secure: settingsSmtpSecure.checked,
-        ignoreTLS: settingsSmtpIgnoreTLS.checked,
-        auth: {
-          user: settingsSmtpUser.value.trim(),
-          pass: settingsSmtpPass.value.trim()
-        },
-        from: settingsSmtpFrom.value.trim()
+  // --- Редактирование роли пользователя ---
+  let editingUserLogin = null;
+
+  function openEditUserModal(login, role) {
+    editingUserLogin = login;
+    document.getElementById('editUserLogin').value = login;
+    document.getElementById('editUserRole').value = role;
+    // Скрываем модалку пользователей
+    document.getElementById('usersModal').classList.add('hidden');
+    document.getElementById('editUserModal').classList.remove('hidden');
+  }
+
+  document.getElementById('saveUserRoleBtn').addEventListener('click', async () => {
+    const login = editingUserLogin;
+    const role = document.getElementById('editUserRole').value;
+    if (!login) return;
+    try {
+      await apiFetch(`/api/users/${login}`, {
+        method: 'PUT',
+        body: { userRole: role }
+      });
+      alert('Роль обновлена');
+      closeModal('editUserModal');
+      loadUsers();
+    } catch (e) {
+      alert('Ошибка обновления: ' + e.message);
+    }
+  });
+
+  // --- Смена пароля пользователя администратором ---
+  let changingUserLogin = null;
+
+  function openChangePasswordModal(login) {
+    changingUserLogin = login;
+    document.getElementById('changePasswordUserLogin').textContent = login;
+    document.getElementById('changePasswordNew').value = '';
+    document.getElementById('changePasswordConfirm').value = '';
+    document.getElementById('changePasswordError').textContent = '';
+    // Скрываем модалку пользователей
+    document.getElementById('usersModal').classList.add('hidden');
+    document.getElementById('changePasswordModal').classList.remove('hidden');
+  }
+
+  saveUserPasswordBtn.addEventListener('click', async () => {
+    const login = changingUserLogin;
+    const newPass = document.getElementById('changePasswordNew').value.trim();
+    const confirmPass = document.getElementById('changePasswordConfirm').value.trim();
+    const errorEl = document.getElementById('changePasswordError');
+
+    if (!login) return;
+    if (!newPass) {
+      errorEl.textContent = 'Введите новый пароль';
+      return;
+    }
+    if (newPass.length < 4) {
+      errorEl.textContent = 'Пароль должен быть не менее 4 символов';
+      return;
+    }
+    if (newPass !== confirmPass) {
+      errorEl.textContent = 'Пароли не совпадают';
+      return;
+    }
+    errorEl.textContent = '';
+
+    try {
+      await apiFetch(`/api/users/${login}`, {
+        method: 'PUT',
+        body: { password: newPass }
+      });
+      alert('Пароль обновлён');
+      closeModal('changePasswordModal');
+    } catch (e) {
+      errorEl.textContent = 'Ошибка: ' + e.message;
+    }
+  });
+
+  async function addUser() {
+    const login = newUserLogin.value.trim();
+    const password = newUserPassword.value.trim();
+    const role = newUserRole.value;
+    if (!login || !password) {
+      alert('Введите логин и пароль');
+      return;
+    }
+    try {
+      await apiFetch('/api/users', {
+        method: 'POST',
+        body: { login, password, userRole: role }
+      });
+      alert('Пользователь добавлен');
+      newUserLogin.value = '';
+      newUserPassword.value = '';
+      loadUsers();
+    } catch (e) {
+      alert('Ошибка добавления: ' + e.message);
+    }
+  }
+
+  async function updateUser(login, password, role) {
+    try {
+      await apiFetch(`/api/users/${login}`, {
+        method: 'PUT',
+        body: { password, userRole: role }
+      });
+      alert('Пользователь обновлён');
+      loadUsers();
+    } catch (e) {
+      alert('Ошибка обновления: ' + e.message);
+    }
+  }
+
+  usersBtn.addEventListener('click', async () => {
+    usersModal.classList.remove('hidden');
+    await loadUsers();
+  });
+
+  addUserBtn.addEventListener('click', addUser);
+
+  // --- Шаблоны писем ---
+  async function loadEmailTemplates() {
+    try {
+      const templates = await apiFetch('/api/email-templates');
+      unavailableSubject.value = templates.unavailable?.subject || '';
+      unavailableBody.value = templates.unavailable?.body || '';
+      backupSubject.value = templates.backup?.subject || '';
+      backupBody.value = templates.backup?.body || '';
+    } catch (e) {
+      alert('Ошибка загрузки шаблонов: ' + e.message);
+    }
+  }
+
+  async function saveEmailTemplates() {
+    const data = {
+      unavailable: {
+        subject: unavailableSubject.value.trim(),
+        body: unavailableBody.value.trim()
+      },
+      backup: {
+        subject: backupSubject.value.trim(),
+        body: backupBody.value.trim()
       }
     };
-
-    await apiFetch('/api/config', {
-      method: 'PUT',
-      body: config
-    });
-    // Настройки сохранены
-  } catch (e) {
-    alert('Ошибка сохранения настроек: ' + e.message);
-    return; // не отправляем письмо, если не сохранилось
-  }
-
-  // 2. Теперь отправляем тестовое письмо с новыми настройками
-  try {
-    const result = await apiFetch('/api/test-email', {
-      method: 'POST',
-      body: { to: email }
-    });
-    if (result.success) {
-      testResultContent.innerHTML = '✅ ' + result.message;
-    } else {
-      testResultContent.innerHTML = '❌ ' + result.message + '\n\nДетали:\n' + (result.details || 'Нет дополнительной информации');
+    try {
+      await apiFetch('/api/email-templates', {
+        method: 'PUT',
+        body: data
+      });
+      alert('Шаблоны сохранены');
+      closeModal('emailTemplatesModal');
+    } catch (e) {
+      alert('Ошибка сохранения: ' + e.message);
     }
-    testResultModal.classList.remove('hidden');
-  } catch (e) {
-    testResultContent.innerHTML = '❌ Ошибка запроса: ' + e.message;
-    testResultModal.classList.remove('hidden');
   }
-});
+
+  emailTemplatesBtn.addEventListener('click', async () => {
+    await loadEmailTemplates();
+    emailTemplatesModal.classList.remove('hidden');
+  });
+
+  saveTemplatesBtn.addEventListener('click', saveEmailTemplates);
+
+  // --- Ручной бэкап ---
+  backupNowBtn.addEventListener('click', async () => {
+    if (!confirm('Создать резервную копию сейчас?')) return;
+    try {
+      await apiFetch('/api/backup', { method: 'POST' });
+      alert('Резервная копия создана и отправлена на почту');
+    } catch (e) {
+      alert('Ошибка: ' + e.message);
+    }
+  });
 
   // --- Экспорт/Импорт ---
   function exportData() {
@@ -921,6 +1256,11 @@
     if (id === 'passwordModal') {
       passwordError.textContent = '';
     }
+
+    // Если закрываем editUserModal или changePasswordModal, показываем usersModal
+    if (id === 'editUserModal' || id === 'changePasswordModal') {
+      document.getElementById('usersModal').classList.remove('hidden');
+    }
   }
 
   document.querySelectorAll('.modal-close').forEach(el => {
@@ -946,6 +1286,48 @@
   checkAllBtn.addEventListener('click', checkAll);
   exportDataBtn.addEventListener('click', exportData);
   importDataBtn.addEventListener('click', importData);
+  helpBtn.addEventListener('click', async () => {
+  const helpModal = document.getElementById('helpModal');
+  if (!helpModal) return;
+  helpModal.style.display = 'flex';
+  helpModal.classList.remove('hidden');
+
+  const helpContent = document.getElementById('helpContent');
+  if (!helpContent) return;
+  // Если уже загружено, не перезагружаем (но аккордеон уже инициализирован)
+  if (helpContent.dataset.loaded === 'true') {
+    // Аккордеон уже работает, ничего не делаем
+    return;
+  }
+
+  try {
+    const response = await fetch('/help.html');
+    if (!response.ok) throw new Error('Не удалось загрузить справку');
+    const html = await response.text();
+    helpContent.innerHTML = html;
+    helpContent.dataset.loaded = 'true';
+
+    // --- Инициализация аккордеона ---
+    const headers = helpContent.querySelectorAll('.accordion-header');
+    headers.forEach(header => {
+      header.addEventListener('click', function(e) {
+        const item = this.parentElement;
+        // Переключаем класс open
+        item.classList.toggle('open');
+        // Закрываем все остальные (если нужно аккордеон с одним открытым блоком)
+        // Раскомментируйте следующие строки, если хотите, чтобы открывался только один блок:
+        /*
+        const allItems = helpContent.querySelectorAll('.accordion-item');
+        allItems.forEach(it => {
+          if (it !== item) it.classList.remove('open');
+        });
+        */
+      });
+    });
+  } catch (e) {
+    helpContent.innerHTML = `<p style="color:#e74c3c;">Ошибка загрузки справки: ${e.message}</p>`;
+  }
+});
 
   // --- Инициализация ---
   (async function init() {
@@ -955,6 +1337,10 @@
       if (data.authenticated) {
         loginForm.classList.add('hidden');
         dashboard.classList.remove('hidden');
+        loginError.textContent = '';
+        window.userRole = data.role || 'guest';
+        console.log('applyRoleRestrictions вызвана с ролью:', window.userRole);
+        applyRoleRestrictions(window.userRole);
         await loadData();
       } else {
         loginForm.classList.remove('hidden');
@@ -966,4 +1352,4 @@
     }
   })();
 
-})();r
+})();

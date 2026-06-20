@@ -7,10 +7,18 @@ const path = require('path');
 const nodemailer = require('nodemailer');
 const multer = require('multer');
 const bcrypt = require('bcrypt');
+const archiver = require('archiver');
 const { pipeline } = require('stream/promises');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+
+// --- Роли пользователей ---
+const USER_ROLES = {
+  ADMIN: 'admin',
+  USER: 'user',
+  GUEST: 'guest'
+};
 
 // --- Загрузка конфига ---
 let config;
@@ -20,42 +28,82 @@ function loadConfig() {
   try {
     const raw = fs.readFileSync(CONFIG_FILE, 'utf8');
     config = JSON.parse(raw);
-    if (config.password) {
-      const saltRounds = 10;
-      config.passwordHash = bcrypt.hashSync(config.password, saltRounds);
-      delete config.password;
-      saveConfig();
-      console.log('✅ Пароль обновлён (хеширован)');
+    
+    // Перенос старого пароля в новую структуру
+    if (config.passwordHash && !config.users) {
+      config.users = {
+        admin: {
+          passwordHash: config.passwordHash,
+          role: 'admin'
+        }
+      };
+      delete config.passwordHash;
     }
-    if (!config.passwordHash) {
+    
+    // Если нет пользователей, создаём админа
+    if (!config.users || Object.keys(config.users).length === 0) {
       const saltRounds = 10;
       const defaultPassword = 'password';
-      config.passwordHash = bcrypt.hashSync(defaultPassword, saltRounds);
-      config.login = config.login || 'admin';
-      config.port = config.port || 3000;
-      config.baseUrl = config.baseUrl || 'http://localhost:3000';
-      config.checkIntervalMinutes = config.checkIntervalMinutes || 1;
-      config.notificationIntervalHours = config.notificationIntervalHours || 24;
-      config.fileDownloadTimeout = config.fileDownloadTimeout || 60000;
-      config.smtp = config.smtp || { host: '', port: 587, secure: false, auth: { user: '', pass: '' }, from: '' };
-      saveConfig();
-      console.log('🔑 Создан новый конфиг с паролем по умолчанию: password');
+      config.users = {
+        admin: {
+          passwordHash: bcrypt.hashSync(defaultPassword, saltRounds),
+          role: 'admin'
+        }
+      };
+      console.log('🔑 Создан пользователь admin с паролем: password');
     }
-    if (config.notificationIntervalHours === undefined) config.notificationIntervalHours = 24;
-    if (config.fileDownloadTimeout === undefined) config.fileDownloadTimeout = 60000;
-    if (config.smtp && config.smtp.ignoreTLS === undefined) config.smtp.ignoreTLS = true;
+    
+    // Добавляем недостающие поля
+    if (!config.adminEmail) config.adminEmail = 'admin@example.com';
+    if (!config.backupIntervalHours) config.backupIntervalHours = 24;
+    if (!config.backupRetentionDays) config.backupRetentionDays = 7;
+    if (!config.baseUrl) config.baseUrl = 'http://localhost:3000';
+    if (!config.checkIntervalMinutes) config.checkIntervalMinutes = 1;
+    if (!config.notificationIntervalHours) config.notificationIntervalHours = 24;
+    if (!config.fileDownloadTimeout) config.fileDownloadTimeout = 60000;
+    if (!config.port) config.port = 3000;
+    if (!config.smtp) {
+      config.smtp = {
+        host: 'smtp.example.com',
+        port: 587,
+        secure: false,
+        ignoreTLS: true,
+        auth: { user: '', pass: '' },
+        from: 'noreply@example.com'
+      };
+    }
+    if (!config.emailTemplates) {
+      config.emailTemplates = {
+        unavailable: {
+          subject: '⚠️ Недоступны ссылки в теге {{tag.name}}',
+          body: '<h2>Уважаемый пользователь!</h2><p>Обнаружены недоступные ссылки в теге <strong>{{tag.name}}</strong>:</p><ul>{{#each links}}<li><strong>{{this.name}}</strong> — <a href="{{this.url}}">{{this.url}}</a> (статус: {{this.status}})</li>{{/each}}</ul><p>Пожалуйста, проверьте доступность ресурсов.</p>'
+        },
+        backup: {
+          subject: '📦 Резервная копия Redirect Manager за {{date}}',
+          body: '<h2>Резервная копия</h2><p>Создана резервная копия конфигурации и данных за <strong>{{date}}</strong>.</p><p>Файлы приложены к письму.</p>'
+        }
+      };
+    }
+    saveConfig();
   } catch (e) {
     console.error('❌ Ошибка загрузки config.json, создаём новый', e);
     const saltRounds = 10;
     const defaultPassword = 'password';
     config = {
-      login: 'admin',
-      passwordHash: bcrypt.hashSync(defaultPassword, saltRounds),
+      users: {
+        admin: {
+          passwordHash: bcrypt.hashSync(defaultPassword, saltRounds),
+          role: 'admin'
+        }
+      },
       port: 3000,
       baseUrl: 'http://localhost:3000',
       checkIntervalMinutes: 1,
       notificationIntervalHours: 24,
       fileDownloadTimeout: 60000,
+      adminEmail: 'admin@example.com',
+      backupIntervalHours: 24,
+      backupRetentionDays: 7,
       smtp: {
         host: 'smtp.example.com',
         port: 587,
@@ -63,10 +111,20 @@ function loadConfig() {
         ignoreTLS: true,
         auth: { user: '', pass: '' },
         from: 'noreply@example.com'
+      },
+      emailTemplates: {
+        unavailable: {
+          subject: '⚠️ Недоступны ссылки в теге {{tag.name}}',
+          body: '<h2>Уважаемый пользователь!</h2><p>Обнаружены недоступные ссылки в теге <strong>{{tag.name}}</strong>:</p><ul>{{#each links}}<li><strong>{{this.name}}</strong> — <a href="{{this.url}}">{{this.url}}</a> (статус: {{this.status}})</li>{{/each}}</ul><p>Пожалуйста, проверьте доступность ресурсов.</p>'
+        },
+        backup: {
+          subject: '📦 Резервная копия Redirect Manager за {{date}}',
+          body: '<h2>Резервная копия</h2><p>Создана резервная копия конфигурации и данных за <strong>{{date}}</strong>.</p><p>Файлы приложены к письму.</p>'
+        }
       }
     };
     saveConfig();
-    console.log('🔑 Создан новый config.json с паролем: password');
+    console.log('🔑 Создан новый config.json с пользователем admin (пароль: password)');
   }
 }
 
@@ -161,6 +219,45 @@ const storage = multer.diskStorage({
   }
 });
 const upload = multer({ storage: storage, limits: { fileSize: 5 * 1024 * 1024 } });
+
+// --- Функции для работы с пользователями ---
+function getUserRole(login) {
+  if (!login || !config.users) return USER_ROLES.GUEST;
+  const user = config.users[login];
+  return user ? user.role : USER_ROLES.GUEST;
+}
+
+function checkUserPassword(login, password) {
+  if (!login || !config.users || !config.users[login]) return false;
+  const user = config.users[login];
+  return user.passwordHash && bcrypt.compareSync(password, user.passwordHash);
+}
+
+function getAllUsers() {
+  if (!config.users) return {};
+  return Object.keys(config.users).map(login => ({
+    login: login,
+    role: config.users[login].role
+  }));
+}
+
+function saveUser(login, password, role) {
+  const saltRounds = 10;
+  const passwordHash = bcrypt.hashSync(password, saltRounds);
+  if (!config.users) config.users = {};
+  config.users[login] = { passwordHash, role };
+  saveConfig();
+}
+
+function deleteUser(login) {
+  if (login === 'admin') {
+    throw new Error('Нельзя удалить администратора');
+  }
+  if (config.users && config.users[login]) {
+    delete config.users[login];
+    saveConfig();
+  }
+}
 
 // --- Вспомогательные функции ---
 function generateId() {
@@ -372,9 +469,7 @@ async function sendEmail(to, subject, text) {
   try {
     const transporter = nodemailer.createTransport({
       ...config.smtp,
-      tls: {
-        rejectUnauthorized: !(config.smtp?.ignoreTLS || false) // если ignoreTLS = true, отключаем проверку
-      }
+      tls: { rejectUnauthorized: !config.smtp.ignoreTLS }
     });
     await transporter.sendMail({
       from: config.smtp.from || 'noreply@example.com',
@@ -385,7 +480,150 @@ async function sendEmail(to, subject, text) {
     console.log(`✅ Email отправлен на ${to}`);
   } catch (e) {
     console.error('❌ Ошибка отправки email:', e);
-    throw e; // пробрасываем, чтобы вызывающий код знал об ошибке
+    throw e;
+  }
+}
+
+async function sendEmailWithAttachment(to, subject, body, attachmentPath, filename) {
+  if (!config.smtp || !config.smtp.auth || !config.smtp.auth.user) {
+    console.log(`[EMAIL] To: ${to}, Subject: ${subject}`);
+    return;
+  }
+  try {
+    const transporter = nodemailer.createTransport({
+      ...config.smtp,
+      tls: { rejectUnauthorized: !config.smtp.ignoreTLS }
+    });
+    await transporter.sendMail({
+      from: config.smtp.from || 'noreply@example.com',
+      to,
+      subject,
+      html: body,
+      attachments: [{
+        filename: filename,
+        path: attachmentPath
+      }]
+    });
+    console.log(`✅ Бэкап отправлен на ${to}`);
+  } catch (e) {
+    console.error('Ошибка отправки бэкапа:', e);
+  }
+}
+
+// --- Отправка группового уведомления о недоступных ссылках ---
+async function sendUnavailableNotification(tag, unavailableLinks) {
+  if (!tag || !tag.email) return;
+  
+  const template = config.emailTemplates.unavailable;
+  const subject = template.subject.replace('{{tag.name}}', tag.name);
+  
+  let linksHtml = '';
+  for (const link of unavailableLinks) {
+    const status = link.lastStatus || 'неизвестно';
+    linksHtml += `<li><strong>${link.name}</strong> — <a href="${link.url}">${link.url}</a> (статус: ${status})</li>`;
+  }
+  
+  let body = template.body.replace('{{#each links}}', '').replace('{{/each}}', '');
+  body = body.replace('{{#each links}}', linksHtml);
+  
+  const recipients = [tag.email];
+  if (config.adminEmail && config.adminEmail !== tag.email) {
+    recipients.push(config.adminEmail);
+  }
+  
+  for (const recipient of recipients) {
+    try {
+      await sendEmail(recipient, subject, body);
+    } catch (e) {
+      console.error(`Ошибка отправки уведомления на ${recipient}:`, e);
+    }
+  }
+}
+
+// --- Резервное копирование ---
+async function createBackup() {
+  const backupDir = './backups';
+  if (!fs.existsSync(backupDir)) fs.mkdirSync(backupDir);
+  
+  const date = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+  const backupPath = path.join(backupDir, date);
+  
+  try {
+    fs.mkdirSync(backupPath, { recursive: true });
+    
+    fs.copyFileSync(CONFIG_FILE, path.join(backupPath, 'config.json'));
+    fs.copyFileSync(DATA_FILE, path.join(backupPath, 'url.json'));
+    if (fs.existsSync(DEFAULT_TEMPLATE_PATH)) {
+      fs.copyFileSync(DEFAULT_TEMPLATE_PATH, path.join(backupPath, 'default.html'));
+    }
+    
+    console.log(`✅ Создан бэкап: ${backupPath}`);
+    
+    if (config.adminEmail && config.smtp && config.smtp.auth && config.smtp.auth.user) {
+      await sendBackupEmail(backupPath);
+    }
+    
+    await cleanupOldBackups();
+  } catch (e) {
+    console.error('Ошибка создания бэкапа:', e);
+  }
+}
+
+async function sendBackupEmail(backupPath) {
+  try {
+    const template = config.emailTemplates.backup;
+    const date = new Date().toLocaleString('ru-RU');
+    const subject = template.subject.replace('{{date}}', date);
+    const body = template.body.replace('{{date}}', date);
+    
+    const zipPath = backupPath + '.zip';
+    const output = fs.createWriteStream(zipPath);
+    const archive = archiver('zip', { zlib: { level: 9 } });
+    
+    return new Promise((resolve, reject) => {
+      output.on('close', async () => {
+        try {
+          await sendEmailWithAttachment(
+            config.adminEmail,
+            subject,
+            body,
+            zipPath,
+            `backup-${date}.zip`
+          );
+          fs.unlinkSync(zipPath);
+          resolve();
+        } catch (err) {
+          reject(err);
+        }
+      });
+      
+      archive.on('error', reject);
+      archive.pipe(output);
+      archive.directory(backupPath, false);
+      archive.finalize();
+    });
+  } catch (e) {
+    console.error('Ошибка отправки бэкапа по почте:', e);
+  }
+}
+
+async function cleanupOldBackups() {
+  const backupDir = './backups';
+  if (!fs.existsSync(backupDir)) return;
+  
+  const files = fs.readdirSync(backupDir);
+  const now = Date.now();
+  const retentionMs = config.backupRetentionDays * 24 * 60 * 60 * 1000;
+  
+  for (const file of files) {
+    const filePath = path.join(backupDir, file);
+    const stats = fs.statSync(filePath);
+    const age = now - stats.mtimeMs;
+    
+    if (age > retentionMs) {
+      fs.rmSync(filePath, { recursive: true, force: true });
+      console.log(`🗑️ Удалён старый бэкап: ${file}`);
+    }
   }
 }
 
@@ -431,49 +669,40 @@ async function checkLinkAvailability(link) {
   }
 }
 
+// --- Проверка всех ссылок ---
 async function checkAllLinks() {
   console.log('Запущена периодическая проверка ссылок...');
   const results = [];
+  const tagUnavailable = {};
+  
   for (const link of data.links) {
     const status = await checkLinkAvailability(link);
     const wasAvailable = link.available;
     link.available = status.ok;
     link.lastChecked = new Date().toISOString();
+    link.lastStatus = status.status || 'unknown';
 
     if (!link.isFile) {
       generateRedirectFile(link);
     }
 
-    if (!link.available) {
-      const tag = getTagById(link.tagId);
-      if (tag && tag.email) {
-        const shouldSend = (() => {
-          if (wasAvailable) return true;
-          if (link.lastNotificationSent) {
-            const lastSent = new Date(link.lastNotificationSent);
-            const now = new Date();
-            const hoursDiff = (now - lastSent) / (1000 * 60 * 60);
-            return hoursDiff >= config.notificationIntervalHours;
-          }
-          return true;
-        })();
-        if (shouldSend && status.status >= 400) {
-          const subject = wasAvailable
-            ? `Ссылка "${link.name}" стала недоступна (${status.status})`
-            : `Ссылка "${link.name}" всё ещё недоступна (повторное уведомление)`;
-          const text = `Ссылка: ${link.url}\nСтатус: ${status.status}\nОшибка: ${status.error || ''}`;
-          await sendEmail(tag.email, subject, text);
-          link.lastNotificationSent = new Date().toISOString();
-        }
+    if (!link.available && status.status >= 400) {
+      if (!tagUnavailable[link.tagId]) {
+        tagUnavailable[link.tagId] = [];
       }
-    } else {
-      if (!wasAvailable) {
-        link.lastNotificationSent = null;
-      }
+      tagUnavailable[link.tagId].push(link);
     }
 
     results.push({ linkId: link.id, available: link.available, status: status.status });
   }
+
+  for (const [tagId, links] of Object.entries(tagUnavailable)) {
+    const tag = getTagById(tagId);
+    if (tag && tag.email) {
+      await sendUnavailableNotification(tag, links);
+    }
+  }
+
   saveData();
   return results;
 }
@@ -484,23 +713,29 @@ async function checkAllLinks() {
 app.post('/api/login', (req, res) => {
   const { login, password } = req.body;
   console.log(`Попытка входа: login=${login}`);
-  if (login === config.login) {
-    if (config.passwordHash && bcrypt.compareSync(password, config.passwordHash)) {
-      req.session.user = { login };
-      console.log('✅ Вход успешен');
-      return res.json({ success: true });
-    } else {
-      console.log('❌ Неверный пароль');
-    }
-  } else {
-    console.log('❌ Неверный логин');
+  
+  if (!login || !password) {
+    return res.status(401).json({ error: 'Неверный логин или пароль' });
   }
+  
+  if (checkUserPassword(login, password)) {
+    const role = getUserRole(login);
+    req.session.user = { login, role };
+    console.log(`✅ Вход успешен: ${login} (${role})`);
+    return res.json({ success: true, role });
+  }
+  
+  console.log(`❌ Неверный логин или пароль: ${login}`);
   res.status(401).json({ error: 'Неверный логин или пароль' });
 });
 
 app.get('/api/check-auth', (req, res) => {
   if (req.session.user) {
-    res.json({ authenticated: true });
+    res.json({
+      authenticated: true,
+      login: req.session.user.login,
+      role: req.session.user.role || getUserRole(req.session.user.login)
+    });
   } else {
     res.json({ authenticated: false });
   }
@@ -511,97 +746,124 @@ app.post('/api/logout', (req, res) => {
   res.json({ success: true });
 });
 
-// --- Смена пароля ---
+// --- Смена пароля (только для текущего пользователя) ---
 app.post('/api/change-password', async (req, res) => {
   if (!req.session.user) return res.status(401).json({ error: 'Unauthorized' });
   const { currentPassword, newPassword } = req.body;
+  const login = req.session.user.login;
+  
   if (!currentPassword || !newPassword) {
     return res.status(400).json({ error: 'Необходимо ввести текущий и новый пароль' });
   }
-  if (!config.passwordHash || !bcrypt.compareSync(currentPassword, config.passwordHash)) {
+  if (!config.users || !config.users[login]) {
+    return res.status(400).json({ error: 'Пользователь не найден' });
+  }
+  if (!bcrypt.compareSync(currentPassword, config.users[login].passwordHash)) {
     return res.status(400).json({ error: 'Неверный текущий пароль' });
   }
   if (newPassword.length < 4) {
     return res.status(400).json({ error: 'Новый пароль должен быть не менее 4 символов' });
   }
+  
   const saltRounds = 10;
-  config.passwordHash = bcrypt.hashSync(newPassword, saltRounds);
-  if (config.password) delete config.password;
+  config.users[login].passwordHash = bcrypt.hashSync(newPassword, saltRounds);
   saveConfig();
   res.json({ success: true });
 });
 
-// --- Получение и сохранение конфигурации ---
-app.get('/api/config', (req, res) => {
+// --- Управление пользователями (только админ) ---
+app.get('/api/users', (req, res) => {
   if (!req.session.user) return res.status(401).json({ error: 'Unauthorized' });
-  const safeConfig = {
-    login: config.login,
-    port: config.port,
-    baseUrl: config.baseUrl,
-    checkIntervalMinutes: config.checkIntervalMinutes,
-    notificationIntervalHours: config.notificationIntervalHours,
-    smtp: {
-        host: config.smtp?.host || '',
-        port: config.smtp?.port || 587,
-        secure: config.smtp?.secure || false,
-        ignoreTLS: config.smtp?.ignoreTLS || true,
-        auth: {
-          user: config.smtp?.auth?.user || '',
-          pass: config.smtp?.auth?.pass || ''
-        },
-    from: config.smtp?.from || ''
-        }
-    };
-  res.json(safeConfig);
+  const role = getUserRole(req.session.user.login);
+  if (role !== USER_ROLES.ADMIN) {
+    return res.status(403).json({ error: 'Доступ запрещён. Только администратор' });
+  }
+  res.json(getAllUsers());
 });
 
-app.put('/api/config', (req, res) => {
+app.post('/api/users', (req, res) => {
   if (!req.session.user) return res.status(401).json({ error: 'Unauthorized' });
-  const { baseUrl, checkIntervalMinutes, notificationIntervalHours, smtp } = req.body;
-  if (baseUrl !== undefined) config.baseUrl = baseUrl;
-  if (checkIntervalMinutes !== undefined) config.checkIntervalMinutes = checkIntervalMinutes;
-  if (notificationIntervalHours !== undefined) config.notificationIntervalHours = notificationIntervalHours;
-  if (smtp !== undefined) {
-    config.smtp = {
-      host: smtp.host || config.smtp?.host || '',
-      port: smtp.port || config.smtp?.port || 587,
-      secure: smtp.secure !== undefined ? smtp.secure : (config.smtp?.secure || false),
-      ignoreTLS: smtp.ignoreTLS !== undefined ? smtp.ignoreTLS : (config.smtp?.ignoreTLS || false),
-      auth: {
-        user: smtp.auth?.user || config.smtp?.auth?.user || '',
-        pass: smtp.auth?.pass || config.smtp?.auth?.pass || ''
-      },
-      from: smtp.from || config.smtp?.from || ''
-    };
+  const role = getUserRole(req.session.user.login);
+  if (role !== USER_ROLES.ADMIN) {
+    return res.status(403).json({ error: 'Доступ запрещён. Только администратор' });
+  }
+  
+  const { login, password, userRole } = req.body;
+  if (!login || !password || !userRole) {
+    return res.status(400).json({ error: 'Необходимо указать логин, пароль и роль' });
+  }
+  if (login.length < 3) {
+    return res.status(400).json({ error: 'Логин должен быть не менее 3 символов' });
+  }
+  if (password.length < 4) {
+    return res.status(400).json({ error: 'Пароль должен быть не менее 4 символов' });
+  }
+  if (!Object.values(USER_ROLES).includes(userRole)) {
+    return res.status(400).json({ error: 'Некорректная роль' });
+  }
+  if (config.users && config.users[login]) {
+    return res.status(400).json({ error: 'Пользователь с таким логином уже существует' });
+  }
+  
+  saveUser(login, password, userRole);
+  res.json({ success: true, login, role: userRole });
+});
+
+app.put('/api/users/:login', (req, res) => {
+  if (!req.session.user) return res.status(401).json({ error: 'Unauthorized' });
+  const role = getUserRole(req.session.user.login);
+  if (role !== USER_ROLES.ADMIN) {
+    return res.status(403).json({ error: 'Доступ запрещён. Только администратор' });
+  }
+  
+  const { login } = req.params;
+  const { password, userRole } = req.body;
+  
+  if (!config.users || !config.users[login]) {
+    return res.status(404).json({ error: 'Пользователь не найден' });
+  }
+  if (login === 'admin' && userRole && userRole !== 'admin') {
+    return res.status(400).json({ error: 'Нельзя изменить роль администратора' });
+  }
+  
+  if (password) {
+    if (password.length < 4) {
+      return res.status(400).json({ error: 'Пароль должен быть не менее 4 символов' });
+    }
+    const saltRounds = 10;
+    config.users[login].passwordHash = bcrypt.hashSync(password, saltRounds);
+  }
+  if (userRole) {
+    if (!Object.values(USER_ROLES).includes(userRole)) {
+      return res.status(400).json({ error: 'Некорректная роль' });
+    }
+    config.users[login].role = userRole;
   }
   saveConfig();
   res.json({ success: true });
 });
 
-// --- Тестовое письмо ---
-// --- Тестовое письмо с отладочной информацией ---
-app.post('/api/test-email', async (req, res) => {
+app.delete('/api/users/:login', (req, res) => {
   if (!req.session.user) return res.status(401).json({ error: 'Unauthorized' });
-  const { to } = req.body;
-  if (!to) return res.status(400).json({ error: 'Не указан получатель' });
-  try {
-    await sendEmail(to, 'Тестовое письмо от Redirect Manager', 'Это тестовое письмо для проверки SMTP-настроек.');
-    res.json({
-      success: true,
-      message: 'Письмо успешно отправлено на ' + to,
-      details: null
-    });
-  } catch (e) {
-    console.error('Ошибка отправки тестового письма:', e);
-    res.status(500).json({
-      success: false,
-      message: 'Ошибка отправки: ' + e.message,
-      details: e.stack || e.toString()
-    });
+  const role = getUserRole(req.session.user.login);
+  if (role !== USER_ROLES.ADMIN) {
+    return res.status(403).json({ error: 'Доступ запрещён. Только администратор' });
   }
+  
+  const { login } = req.params;
+  if (login === 'admin') {
+    return res.status(400).json({ error: 'Нельзя удалить администратора' });
+  }
+  if (!config.users || !config.users[login]) {
+    return res.status(404).json({ error: 'Пользователь не найден' });
+  }
+  
+  delete config.users[login];
+  saveConfig();
+  res.json({ success: true });
 });
 
-// --- Теги (CRUD) ---
+// --- Теги (CRUD) с проверкой ролей ---
 app.get('/api/tags', (req, res) => {
   if (!req.session.user) return res.status(401).json({ error: 'Unauthorized' });
   res.json(data.tags);
@@ -609,6 +871,10 @@ app.get('/api/tags', (req, res) => {
 
 app.post('/api/tags', (req, res) => {
   if (!req.session.user) return res.status(401).json({ error: 'Unauthorized' });
+  const role = getUserRole(req.session.user.login);
+  if (role === USER_ROLES.GUEST) {
+    return res.status(403).json({ error: 'Доступ запрещён. Недостаточно прав' });
+  }
   const { name, email } = req.body;
   if (!name || !email) return res.status(400).json({ error: 'Необходимо имя и email' });
   if (data.tags.some(t => t.name === name)) {
@@ -622,6 +888,10 @@ app.post('/api/tags', (req, res) => {
 
 app.put('/api/tags/:id', (req, res) => {
   if (!req.session.user) return res.status(401).json({ error: 'Unauthorized' });
+  const role = getUserRole(req.session.user.login);
+  if (role === USER_ROLES.GUEST) {
+    return res.status(403).json({ error: 'Доступ запрещён. Недостаточно прав' });
+  }
   const { id } = req.params;
   const { name, email } = req.body;
   const tag = getTagById(id);
@@ -643,6 +913,10 @@ app.put('/api/tags/:id', (req, res) => {
 
 app.delete('/api/tags/:id', (req, res) => {
   if (!req.session.user) return res.status(401).json({ error: 'Unauthorized' });
+  const role = getUserRole(req.session.user.login);
+  if (role !== USER_ROLES.ADMIN) {
+    return res.status(403).json({ error: 'Доступ запрещён. Только администратор' });
+  }
   const { id } = req.params;
   const tag = getTagById(id);
   if (!tag) return res.status(404).json({ error: 'Тег не найден' });
@@ -658,7 +932,7 @@ app.delete('/api/tags/:id', (req, res) => {
   res.json({ success: true });
 });
 
-// --- Ссылки (CRUD) ---
+// --- Ссылки (CRUD) с проверкой ролей ---
 app.get('/api/links', (req, res) => {
   if (!req.session.user) return res.status(401).json({ error: 'Unauthorized' });
   const { tagId } = req.query;
@@ -669,6 +943,10 @@ app.get('/api/links', (req, res) => {
 
 app.post('/api/links', (req, res) => {
   if (!req.session.user) return res.status(401).json({ error: 'Unauthorized' });
+  const role = getUserRole(req.session.user.login);
+  if (role === USER_ROLES.GUEST) {
+    return res.status(403).json({ error: 'Доступ запрещён. Недостаточно прав' });
+  }
   const { name, url, tagId, isFile } = req.body;
   if (!name || !url || !tagId) return res.status(400).json({ error: 'Необходимо имя, URL и тег' });
   const tag = getTagById(tagId);
@@ -712,6 +990,10 @@ app.post('/api/links', (req, res) => {
 
 app.put('/api/links/:id', (req, res) => {
   if (!req.session.user) return res.status(401).json({ error: 'Unauthorized' });
+  const role = getUserRole(req.session.user.login);
+  if (role === USER_ROLES.GUEST) {
+    return res.status(403).json({ error: 'Доступ запрещён. Недостаточно прав' });
+  }
   const { id } = req.params;
   const { name, url, tagId, isFile } = req.body;
   const link = getLinkById(id);
@@ -754,6 +1036,10 @@ app.put('/api/links/:id', (req, res) => {
 
 app.delete('/api/links/:id', (req, res) => {
   if (!req.session.user) return res.status(401).json({ error: 'Unauthorized' });
+  const role = getUserRole(req.session.user.login);
+  if (role === USER_ROLES.GUEST) {
+    return res.status(403).json({ error: 'Доступ запрещён. Недостаточно прав' });
+  }
   const { id } = req.params;
   const link = getLinkById(id);
   if (!link) return res.status(404).json({ error: 'Ссылка не найдена' });
@@ -773,6 +1059,7 @@ app.get('/api/links/:id/check', async (req, res) => {
   const wasAvailable = link.available;
   link.available = status.ok;
   link.lastChecked = new Date().toISOString();
+  link.lastStatus = status.status || 'unknown';
   saveData();
 
   if (!link.isFile) {
@@ -782,30 +1069,7 @@ app.get('/api/links/:id/check', async (req, res) => {
   if (!link.available) {
     const tag = getTagById(link.tagId);
     if (tag && tag.email) {
-      const shouldSend = (() => {
-        if (wasAvailable) return true;
-        if (link.lastNotificationSent) {
-          const lastSent = new Date(link.lastNotificationSent);
-          const now = new Date();
-          const hoursDiff = (now - lastSent) / (1000 * 60 * 60);
-          return hoursDiff >= config.notificationIntervalHours;
-        }
-        return true;
-      })();
-      if (shouldSend && status.status >= 400) {
-        const subject = wasAvailable
-          ? `Ссылка "${link.name}" стала недоступна (${status.status})`
-          : `Ссылка "${link.name}" всё ещё недоступна (повторное уведомление)`;
-        const text = `Ссылка: ${link.url}\nСтатус: ${status.status}\nОшибка: ${status.error || ''}`;
-        await sendEmail(tag.email, subject, text);
-        link.lastNotificationSent = new Date().toISOString();
-        saveData();
-      }
-    }
-  } else {
-    if (!wasAvailable) {
-      link.lastNotificationSent = null;
-      saveData();
+      await sendUnavailableNotification(tag, [link]);
     }
   }
 
@@ -834,6 +1098,10 @@ app.get('/api/links/:id/stub', (req, res) => {
 
 app.put('/api/links/:id/stub', (req, res) => {
   if (!req.session.user) return res.status(401).json({ error: 'Unauthorized' });
+  const role = getUserRole(req.session.user.login);
+  if (role === USER_ROLES.GUEST) {
+    return res.status(403).json({ error: 'Доступ запрещён. Недостаточно прав' });
+  }
   const { id } = req.params;
   const { content } = req.body;
   const link = getLinkById(id);
@@ -859,6 +1127,10 @@ app.get('/api/default-template', (req, res) => {
 
 app.put('/api/default-template', (req, res) => {
   if (!req.session.user) return res.status(401).json({ error: 'Unauthorized' });
+  const role = getUserRole(req.session.user.login);
+  if (role !== USER_ROLES.ADMIN) {
+    return res.status(403).json({ error: 'Доступ запрещён. Только администратор' });
+  }
   const { content } = req.body;
   if (content === undefined) {
     return res.status(400).json({ error: 'Не передан контент' });
@@ -868,6 +1140,117 @@ app.put('/api/default-template', (req, res) => {
     res.json({ success: true });
   } catch (e) {
     res.status(500).json({ error: 'Ошибка сохранения шаблона' });
+  }
+});
+
+// --- Email-шаблоны ---
+app.get('/api/email-templates', (req, res) => {
+  if (!req.session.user) return res.status(401).json({ error: 'Unauthorized' });
+  const role = getUserRole(req.session.user.login);
+  if (role !== USER_ROLES.ADMIN) {
+    return res.status(403).json({ error: 'Доступ запрещён. Только администратор' });
+  }
+  res.json(config.emailTemplates);
+});
+
+app.put('/api/email-templates', (req, res) => {
+  if (!req.session.user) return res.status(401).json({ error: 'Unauthorized' });
+  const role = getUserRole(req.session.user.login);
+  if (role !== USER_ROLES.ADMIN) {
+    return res.status(403).json({ error: 'Доступ запрещён. Только администратор' });
+  }
+  const { unavailable, backup } = req.body;
+  if (unavailable) {
+    if (unavailable.subject) config.emailTemplates.unavailable.subject = unavailable.subject;
+    if (unavailable.body) config.emailTemplates.unavailable.body = unavailable.body;
+  }
+  if (backup) {
+    if (backup.subject) config.emailTemplates.backup.subject = backup.subject;
+    if (backup.body) config.emailTemplates.backup.body = backup.body;
+  }
+  saveConfig();
+  res.json({ success: true });
+});
+
+// --- Ручной бэкап ---
+app.post('/api/backup', async (req, res) => {
+  if (!req.session.user) return res.status(401).json({ error: 'Unauthorized' });
+  const role = getUserRole(req.session.user.login);
+  if (role !== USER_ROLES.ADMIN) {
+    return res.status(403).json({ error: 'Доступ запрещён. Только администратор' });
+  }
+  try {
+    await createBackup();
+    res.json({ success: true, message: 'Бэкап создан' });
+  } catch (e) {
+    res.status(500).json({ error: 'Ошибка создания бэкапа: ' + e.message });
+  }
+});
+
+// --- Получение и сохранение конфигурации ---
+app.get('/api/config', (req, res) => {
+  if (!req.session.user) return res.status(401).json({ error: 'Unauthorized' });
+  const role = getUserRole(req.session.user.login);
+  if (role !== USER_ROLES.ADMIN) {
+    return res.status(403).json({ error: 'Доступ запрещён. Только администратор' });
+  }
+  const safeConfig = {
+    baseUrl: config.baseUrl,
+    checkIntervalMinutes: config.checkIntervalMinutes,
+    notificationIntervalHours: config.notificationIntervalHours,
+    adminEmail: config.adminEmail,
+    backupIntervalHours: config.backupIntervalHours,
+    backupRetentionDays: config.backupRetentionDays,
+    smtp: config.smtp || { host: '', port: 587, secure: false, ignoreTLS: true, auth: { user: '', pass: '' }, from: '' }
+  };
+  res.json(safeConfig);
+});
+
+app.put('/api/config', (req, res) => {
+  if (!req.session.user) return res.status(401).json({ error: 'Unauthorized' });
+  const role = getUserRole(req.session.user.login);
+  if (role !== USER_ROLES.ADMIN) {
+    return res.status(403).json({ error: 'Доступ запрещён. Только администратор' });
+  }
+  const { baseUrl, checkIntervalMinutes, notificationIntervalHours, adminEmail, backupIntervalHours, backupRetentionDays, smtp } = req.body;
+  if (baseUrl !== undefined) config.baseUrl = baseUrl;
+  if (checkIntervalMinutes !== undefined) config.checkIntervalMinutes = checkIntervalMinutes;
+  if (notificationIntervalHours !== undefined) config.notificationIntervalHours = notificationIntervalHours;
+  if (adminEmail !== undefined) config.adminEmail = adminEmail;
+  if (backupIntervalHours !== undefined) config.backupIntervalHours = backupIntervalHours;
+  if (backupRetentionDays !== undefined) config.backupRetentionDays = backupRetentionDays;
+  if (smtp !== undefined) {
+    config.smtp = {
+      host: smtp.host || config.smtp?.host || '',
+      port: smtp.port || config.smtp?.port || 587,
+      secure: smtp.secure !== undefined ? smtp.secure : (config.smtp?.secure || false),
+      ignoreTLS: smtp.ignoreTLS !== undefined ? smtp.ignoreTLS : (config.smtp?.ignoreTLS || true),
+      auth: {
+        user: smtp.auth?.user || config.smtp?.auth?.user || '',
+        pass: smtp.auth?.pass || config.smtp?.auth?.pass || ''
+      },
+      from: smtp.from || config.smtp?.from || ''
+    };
+  }
+  saveConfig();
+  res.json({ success: true });
+});
+
+// --- Тестовое письмо ---
+app.post('/api/test-email', async (req, res) => {
+  if (!req.session.user) return res.status(401).json({ error: 'Unauthorized' });
+  const role = getUserRole(req.session.user.login);
+  if (role !== USER_ROLES.ADMIN) {
+    return res.status(403).json({ error: 'Доступ запрещён. Только администратор' });
+  }
+  const { to } = req.body;
+  if (!to) return res.status(400).json({ error: 'Не указан получатель' });
+  try {
+    await sendEmail(to, 'Тестовое письмо от Redirect Manager', 'Это тестовое письмо для проверки SMTP-настроек.');
+    res.json({ success: true, message: 'Письмо успешно отправлено на ' + to });
+  } catch (e) {
+    console.error('Ошибка отправки тестового письма:', e);
+    res.status(500).json({ success: false, message: 'Ошибка отправки: ' + e.message, details: e.stack || e.toString() });
   }
 });
 
@@ -947,17 +1330,29 @@ app.get('/redirect/:linkId', (req, res) => {
   res.sendFile(path.resolve(filePath));
 });
 
-// --- Запуск периодической проверки ---
+// --- Запуск периодической проверки и бэкапа ---
 const checkInterval = (config.checkIntervalMinutes || 60) * 60 * 1000;
 setInterval(async () => {
   await checkAllLinks();
 }, checkInterval);
+
+const backupInterval = (config.backupIntervalHours || 24) * 60 * 60 * 1000;
+setInterval(async () => {
+  console.log('📦 Запуск автоматического бэкапа...');
+  await createBackup();
+}, backupInterval);
 
 (async function initCheck() {
   console.log('Первоначальная проверка ссылок...');
   await checkAllLinks();
 })();
 
+setTimeout(async () => {
+  console.log('📦 Создание начального бэкапа...');
+  await createBackup();
+}, 5000);
+
 app.listen(PORT, () => {
   console.log(`✅ Сервер запущен на порту ${PORT}`);
-  console.log(`🔑 Логин: ${config.login}, пароль: ${config.password ? config.password : 'хеширован (установлен)'}`);
+  console.log(`🔑 Пользователи: ${Object.keys(config.users).join(', ')}`);
+});

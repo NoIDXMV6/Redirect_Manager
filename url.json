@@ -9,6 +9,11 @@
       "id": "mqkkgwixjteaef",
       "name": "Издание 2",
       "email": "pavel@kozhevatov.ru"
+    },
+    {
+      "id": "mqkkzdh66esbks",
+      "name": "БЕЗОПАСНОСТЬ ОБРАЗОВАТЕЛЬНЫХ ОРГАНИЗАЦИЙ В СОВРЕМЕННЫХ УСЛОВИЯХ",
+      "email": "pavel@kozhevatov.ru"
     }
   ],
   "links": [
@@ -18,9 +23,10 @@
       "url": "https://mchs.gov.ru",
       "tagId": "mqjlyb3bjdqikh",
       "available": true,
-      "lastChecked": "2026-06-19T12:49:36.282Z",
+      "lastChecked": "2026-06-20T11:50:31.864Z",
       "isFile": false,
-      "lastNotificationSent": null
+      "lastNotificationSent": null,
+      "lastStatus": 200
     },
     {
       "id": "mqkkj62rvzq0hn",
@@ -28,9 +34,43 @@
       "url": "https://qwertasdfgzxcvb.xy",
       "tagId": "mqkkgwixjteaef",
       "available": false,
-      "lastChecked": "2026-06-19T12:49:36.529Z",
+      "lastChecked": "2026-06-20T11:50:32.055Z",
       "isFile": false,
-      "lastNotificationSent": null
+      "lastNotificationSent": null,
+      "lastStatus": "unknown"
+    },
+    {
+      "id": "mqkl0sbissyjt9",
+      "name": "Ссылка № 1. ПЕРВАЯ ПОМОЩЬ: учебное пособие для лиц, оказывающих первую  помощь в соответствии с Порядком оказания первой помощи",
+      "url": "https://allfirstaid.ru/system/files/umk/uchebnoe_posobie_pp.pdf",
+      "tagId": "mqkkzdh66esbks",
+      "available": true,
+      "lastChecked": "2026-06-20T11:50:33.392Z",
+      "isFile": true,
+      "lastNotificationSent": null,
+      "lastStatus": 200
+    },
+    {
+      "id": "mqksi1xvz7tqux",
+      "name": "Ссылка № 2. Извлечение пострадавшего из транспортного средства или других труднодоступных мест",
+      "url": "https://allfirstaid.ru/node/984",
+      "tagId": "mqkkzdh66esbks",
+      "available": true,
+      "lastChecked": "2026-06-20T11:50:33.622Z",
+      "isFile": false,
+      "lastNotificationSent": null,
+      "lastStatus": 200
+    },
+    {
+      "id": "mqm9krcxbw59ap",
+      "name": "Сайт АГПС",
+      "url": "https://academygps.ru",
+      "tagId": "mqkkgwixjteaef",
+      "isFile": false,
+      "available": true,
+      "lastChecked": "2026-06-20T11:50:35.448Z",
+      "lastNotificationSent": null,
+      "lastStatus": 200
     }
   ]
 }

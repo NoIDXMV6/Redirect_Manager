@@ -3,17 +3,44 @@
   "baseUrl": "http://localhost:3000",
   "checkIntervalMinutes": 30,
   "smtp": {
-    "host": "smtp.domain.ru",
+    "host": "smtp.kozhevatov.ru",
     "port": 25,
     "secure": false,
     "ignoreTLS": true,
     "auth": {
-      "user": "some@domain.ru",
-      "pass": "pass"
+      "user": "services@kozhevatov.ru",
+      "pass": "Serv1ce$"
     },
-    "from": "some@domain.ru"
+    "from": "services@kozhevatov.ru"
   },
   "login": "admin",
-  "notificationIntervalHours": 24,
-  "fileDownloadTimeout": 60000
+  "notificationIntervalHours": 2,
+  "fileDownloadTimeout": 60000,
+  "users": {
+    "admin": {
+      "passwordHash": "$2b$10$Bv2VeiknbjFMbnJqr7lxh.i7vC96tIgd4Vro94hMrLUSPkEa/D8u2",
+      "role": "admin"
+    },
+    "guest": {
+      "passwordHash": "$2b$10$8WIVF96XHGahr7gDwKe7ruMVXpJY8Zjl6a608araIAFWlx8HyheIa",
+      "role": "guest"
+    },
+    "manager": {
+      "passwordHash": "$2b$10$nPwY154heqhlEizjjFN0oe7dZg2W181Tq2fclyOHQESjmyDwHQ6hK",
+      "role": "user"
+    }
+  },
+  "adminEmail": "pavel@kozhevatov.ru",
+  "backupIntervalHours": 24,
+  "backupRetentionDays": 7,
+  "emailTemplates": {
+    "unavailable": {
+      "subject": "⚠️ Недоступны ссылки в теге {{tag.name}}",
+      "body": "<h2>Уважаемый пользователь!</h2><p>Обнаружены недоступные ссылки в теге <strong>{{tag.name}}</strong>:</p><ul>{{#each links}}<li><strong>{{this.name}}</strong> — <a href=\"{{this.url}}\">{{this.url}}</a> (статус: {{this.status}})</li>{{/each}}</ul><p>Пожалуйста, проверьте доступность ресурсов.</p>"
+    },
+    "backup": {
+      "subject": "📦 Резервная копия Redirect Manager за {{date}}",
+      "body": "<h2>Резервная копия</h2><p>Создана резервная копия конфигурации и данных за <strong>{{date}}</strong>.</p><p>Файлы приложены к письму.</p>"
+    }
+  }
 }

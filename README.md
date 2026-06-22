@@ -3,8 +3,7 @@
 # Redirect Manager
 
 Панель управления ссылками и QR-кодами для печатных изданий.
-
-<img width="1217" height="555" alt="Screenshot_3" src="https://github.com/user-attachments/assets/4ed28d44-f5f8-497d-9e61-d9e609186802" />
+<img width="1154" height="554" alt="Screenshot_25" src="https://github.com/user-attachments/assets/ec54569b-bda2-45de-b91f-57e7fb93bc19" />
 
 
 ## Описание

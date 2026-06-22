@@ -187,6 +187,13 @@ npm install
 - **`fileDownloadTimeout`** — таймаут скачивания файла в миллисекундах (по умолчанию 60000).
 - **`smtp.ignoreTLS`** — если `true`, отключает проверку SSL-сертификата (полезно для тестирования).
 
+Создайте файл .env
+```text
+NODE_ENV=production
+SESSION_SECRET=someting_very_secret(32)
+SMTP_PASS=Password
+```
+
 ### 4. Запуск вручную (для проверки)
 ```
 node server.js

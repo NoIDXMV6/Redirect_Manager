@@ -8,9 +8,16 @@ const nodemailer = require('nodemailer');
 const multer = require('multer');
 const bcrypt = require('bcrypt');
 const archiver = require('archiver');
+const rateLimit = require('express-rate-limit');
+const helmet = require('helmet');
+const validator = require('validator');
 const { pipeline } = require('stream/promises');
+const progressStore = {};
+require('dotenv').config();
 
 const app = express();
+app.set('trust proxy', 3);
+
 const PORT = process.env.PORT || 3000;
 
 // --- Роли пользователей ---
@@ -20,6 +27,21 @@ const USER_ROLES = {
   GUEST: 'guest'
 };
 
+// --- Глобальные таймеры ---
+let checkTimer = null;
+let backupTimer = null;
+
+// --- Экранирование HTML ---
+function escapeHtml(unsafe) {
+  if (!unsafe) return '';
+  return unsafe
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
+
 // --- Загрузка конфига ---
 let config;
 const CONFIG_FILE = './config.json';
@@ -28,19 +50,21 @@ function loadConfig() {
   try {
     const raw = fs.readFileSync(CONFIG_FILE, 'utf8');
     config = JSON.parse(raw);
-    
-    // Перенос старого пароля в новую структуру
-    if (config.passwordHash && !config.users) {
+
+    // Если есть plain пароль — хешируем
+    if (config.password && !config.users) {
+      const saltRounds = 10;
       config.users = {
         admin: {
-          passwordHash: config.passwordHash,
+          passwordHash: bcrypt.hashSync(config.password, saltRounds),
           role: 'admin'
         }
       };
-      delete config.passwordHash;
+      delete config.password;
     }
-    
-    // Если нет пользователей, создаём админа
+
+    if (!config.checkTimeout) config.checkTimeout = 15000; // 15 секунд по умолчанию
+
     if (!config.users || Object.keys(config.users).length === 0) {
       const saltRounds = 10;
       const defaultPassword = 'password';
@@ -52,7 +76,12 @@ function loadConfig() {
       };
       console.log('🔑 Создан пользователь admin с паролем: password');
     }
-    
+
+    // SMTP пароль из переменной окружения (если задана)
+    if (config.smtp && config.smtp.auth && process.env.SMTP_PASS) {
+      config.smtp.auth.pass = process.env.SMTP_PASS;
+    }
+
     // Добавляем недостающие поля
     if (!config.adminEmail) config.adminEmail = 'admin@example.com';
     if (!config.backupIntervalHours) config.backupIntervalHours = 24;
@@ -161,14 +190,51 @@ loadData();
 
 // --- Настройка Express ---
 app.use(cors({ origin: true, credentials: true }));
+
+// Helmet — защитные заголовки
+app.use(helmet({
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      styleSrc: ["'self'", "https://cdn.jsdelivr.net", "'unsafe-inline'"],
+      scriptSrc: ["'self'", "https://cdn.jsdelivr.net", "https://cdnjs.cloudflare.com", "https://unpkg.com", "'unsafe-inline'"],
+      imgSrc: ["'self'", "data:", "https://*"],
+      connectSrc: ["'self'", "https://cdn.jsdelivr.net"],   // <-- добавить
+      fontSrc: ["'self'", "https://cdn.jsdelivr.net"],
+    },
+  },
+}));
+
 app.use(bodyParser.json({ limit: '10mb' }));
 app.use(bodyParser.urlencoded({ extended: true, limit: '10mb' }));
+
+// Безопасная сессия
+const sessionSecret = process.env.SESSION_SECRET || (process.env.NODE_ENV === 'production' ? undefined : 'dev-secret');
+if (!sessionSecret && process.env.NODE_ENV === 'production') {
+  console.error('❌ SESSION_SECRET не задан в production!');
+  process.exit(1);
+}
 app.use(session({
-  secret: 'secret-key-change-me',
+  secret: sessionSecret || 'fallback-not-secure',
   resave: false,
   saveUninitialized: false,
-  cookie: { secure: false, maxAge: 24 * 60 * 60 * 1000 }
+  cookie: {
+    secure: 'auto',           // <-- определяет протокол по X-Forwarded-Proto
+    httpOnly: true,
+    sameSite: 'lax',
+    maxAge: 24 * 60 * 60 * 1000
+  }
 }));
+
+// Rate limiting для /api/login
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 20,
+  message: { error: 'Слишком много попыток входа. Попробуйте позже.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+app.use('/api/login', loginLimiter);
 
 app.use((req, res, next) => {
   const originalSend = res.send;
@@ -203,7 +269,7 @@ const UPLOAD_DIR = './uploads';
 if (!fs.existsSync(REDIRECT_DIR)) fs.mkdirSync(REDIRECT_DIR);
 if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR);
 
-// --- Multer для загрузки изображений ---
+// --- Multer для загрузки изображений (с проверкой MIME) ---
 const storage = multer.diskStorage({
   destination: function (req, file, cb) {
     const linkId = req.body.linkId || 'global';
@@ -218,7 +284,21 @@ const storage = multer.diskStorage({
     cb(null, basename + '-' + unique + ext);
   }
 });
-const upload = multer({ storage: storage, limits: { fileSize: 5 * 1024 * 1024 } });
+
+const fileFilter = (req, file, cb) => {
+  const allowedTypes = ['image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/svg+xml'];
+  if (allowedTypes.includes(file.mimetype)) {
+    cb(null, true);
+  } else {
+    cb(new Error('Недопустимый тип файла'), false);
+  }
+};
+
+const upload = multer({
+  storage: storage,
+  limits: { fileSize: 5 * 1024 * 1024 },
+  fileFilter: fileFilter
+});
 
 // --- Функции для работы с пользователями ---
 function getUserRole(login) {
@@ -297,6 +377,22 @@ function sanitizeName(name) {
   return result;
 }
 
+// --- Валидация имени тега ---
+function validateTagName(name) {
+  if (!name || name.trim().length === 0) {
+    return { valid: false, error: 'Имя тега не может быть пустым' };
+  }
+  if (name.length > 100) {
+    return { valid: false, error: 'Имя тега не может превышать 100 символов' };
+  }
+  // Проверяем, что после санитизации не получается пустая строка или 'unnamed'
+  const sanitized = sanitizeName(name);
+  if (!sanitized || sanitized === 'unnamed') {
+    return { valid: false, error: 'Имя тега содержит недопустимые символы или состоит только из них' };
+  }
+  return { valid: true };
+}
+
 // --- Работа с шаблоном заглушки ---
 const DEFAULT_TEMPLATE_PATH = './default.html';
 
@@ -338,7 +434,7 @@ function saveDefaultTemplate(content) {
   fs.writeFileSync(DEFAULT_TEMPLATE_PATH, content, 'utf8');
 }
 
-// --- Генерация файлов для ссылки ---
+// --- Генерация файлов для ссылки (с экранированием) ---
 function getLinkFolder(link) {
   const tag = getTagById(link.tagId);
   if (!tag) throw new Error('Тег не найден');
@@ -353,18 +449,20 @@ function getLinkFolder(link) {
 function generateRedirectFile(link) {
   const folder = getLinkFolder(link);
   const filePath = path.join(folder, 'redirect.html');
+  const escapedName = escapeHtml(link.name);
+  const escapedUrl = escapeHtml(link.url);
   const html = `<!DOCTYPE html>
 <html>
 <head>
   <meta charset="UTF-8">
-  <meta http-equiv="refresh" content="0;url=${link.url}">
-  <title>Редирект на ${link.name}</title>
+  <meta http-equiv="refresh" content="0;url=${escapedUrl}">
+  <title>Редирект на ${escapedName}</title>
   <script>
-    window.location.href = "${link.url}";
+    window.location.href = "${escapedUrl}";
   <\/script>
 </head>
 <body>
-  <p>Если вы не перенаправлены автоматически, <a href="${link.url}">нажмите здесь</a>.</p>
+  <p>Если вы не перенаправлены автоматически, <a href="${escapedUrl}">нажмите здесь</a>.</p>
 </body>
 </html>`;
   fs.writeFileSync(filePath, html, 'utf8');
@@ -374,9 +472,11 @@ function generateRedirectFile(link) {
 function generateStubFile(link, templateContent = null) {
   const folder = getLinkFolder(link);
   const filePath = path.join(folder, 'index.html');
+  const escapedName = escapeHtml(link.name);
+  const escapedUrl = escapeHtml(link.url);
   let template = templateContent || getDefaultTemplate();
-  template = template.replace(/\{\{link\.name\}\}/g, link.name);
-  template = template.replace(/\{\{link\.url\}\}/g, link.url);
+  template = template.replace(/\{\{link\.name\}\}/g, escapedName);
+  template = template.replace(/\{\{link\.url\}\}/g, escapedUrl);
   fs.writeFileSync(filePath, template, 'utf8');
   return filePath;
 }
@@ -428,12 +528,10 @@ async function downloadFile(link, metadata) {
     });
 
     if (response.status === 304) {
-//      console.log(`Файл ${link.name} не изменился (304)`);
       return { status: 'not_modified' };
     }
 
     if (!response.ok) {
-//      console.log(`Ошибка скачивания ${link.name}: ${response.status}`);
       return { status: 'error', statusCode: response.status };
     }
 
@@ -452,7 +550,6 @@ async function downloadFile(link, metadata) {
       downloadedAt: new Date().toISOString()
     };
     fs.writeFileSync(metadataPath, JSON.stringify(newMetadata, null, 2));
-//    console.log(`Файл ${link.name} скачан успешно`);
     return { status: 'downloaded', metadata: newMetadata };
   } catch (err) {
     console.error('Ошибка скачивания файла:', err);
@@ -475,7 +572,7 @@ async function sendEmail(to, subject, htmlBody) {
       from: config.smtp.from || 'noreply@example.com',
       to,
       subject,
-      html: htmlBody  // <-- изменено с text на html
+      html: htmlBody
     });
     console.log(`✅ Email отправлен на ${to}`);
   } catch (e) {
@@ -510,7 +607,7 @@ async function sendEmailWithAttachment(to, subject, body, attachmentPath, filena
   }
 }
 
-// --- Отправка группового уведомления о недоступных ссылках ---
+// --- Отправка группового уведомления о недоступных ссылках (с экранированием) ---
 async function sendUnavailableNotification(tag, unavailableLinks) {
   try {
     if (!tag || !tag.email) return;
@@ -525,28 +622,25 @@ async function sendUnavailableNotification(tag, unavailableLinks) {
       const status = link.lastStatus || 'неизвестно';
       let statusText = status;
 
-      // Проверяем, является ли ссылка файлом и есть ли локальная копия
       if (link.isFile) {
         try {
           const folder = getLinkFolder(link);
           const originalFileName = path.basename(new URL(link.url).pathname) || 'file';
           const filePath = path.join(folder, originalFileName);
           const hasLocalCopy = fs.existsSync(filePath);
-
           if (hasLocalCopy) {
-            // Если есть локальная копия, сообщаем об этом
             statusText = `локальная копия (оригинал недоступен, ошибка: ${status})`;
           } else {
-            // Если нет локальной копии, показываем статус оригинального запроса
             statusText = `оригинал недоступен (${status})`;
           }
         } catch (e) {
-          // Если не удалось проверить папку, используем исходный статус
           statusText = status;
         }
       }
 
-      linksHtml += `<li><strong>${link.name}</strong> — <a href="${link.url}">${link.url}</a> (статус: ${statusText})</li>`;
+      const escapedName = escapeHtml(link.name);
+      const escapedUrl = escapeHtml(link.url);
+      linksHtml += `<li><strong>${escapedName}</strong> — <a href="${escapedUrl}">${escapedUrl}</a> (статус: ${statusText})</li>`;
     }
 
     let body = template.body.replace(/\{\{#each links\}\}[\s\S]*?\{\{\/each\}\}/g, linksHtml);
@@ -576,25 +670,25 @@ async function sendUnavailableNotification(tag, unavailableLinks) {
 async function createBackup() {
   const backupDir = './backups';
   if (!fs.existsSync(backupDir)) fs.mkdirSync(backupDir);
-  
+
   const date = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
   const backupPath = path.join(backupDir, date);
-  
+
   try {
     fs.mkdirSync(backupPath, { recursive: true });
-    
+
     fs.copyFileSync(CONFIG_FILE, path.join(backupPath, 'config.json'));
     fs.copyFileSync(DATA_FILE, path.join(backupPath, 'url.json'));
     if (fs.existsSync(DEFAULT_TEMPLATE_PATH)) {
       fs.copyFileSync(DEFAULT_TEMPLATE_PATH, path.join(backupPath, 'default.html'));
     }
-    
+
     console.log(`✅ Создан бэкап: ${backupPath}`);
-    
+
     if (config.adminEmail && config.smtp && config.smtp.auth && config.smtp.auth.user) {
       await sendBackupEmail(backupPath);
     }
-    
+
     await cleanupOldBackups();
   } catch (e) {
     console.error('Ошибка создания бэкапа:', e);
@@ -607,11 +701,11 @@ async function sendBackupEmail(backupPath) {
     const date = new Date().toLocaleString('ru-RU');
     const subject = template.subject.replace('{{date}}', date);
     const body = template.body.replace('{{date}}', date);
-    
+
     const zipPath = backupPath + '.zip';
     const output = fs.createWriteStream(zipPath);
     const archive = archiver('zip', { zlib: { level: 9 } });
-    
+
     return new Promise((resolve, reject) => {
       output.on('close', async () => {
         try {
@@ -628,7 +722,7 @@ async function sendBackupEmail(backupPath) {
           reject(err);
         }
       });
-      
+
       archive.on('error', reject);
       archive.pipe(output);
       archive.directory(backupPath, false);
@@ -642,16 +736,16 @@ async function sendBackupEmail(backupPath) {
 async function cleanupOldBackups() {
   const backupDir = './backups';
   if (!fs.existsSync(backupDir)) return;
-  
+
   const files = fs.readdirSync(backupDir);
   const now = Date.now();
   const retentionMs = config.backupRetentionDays * 24 * 60 * 60 * 1000;
-  
+
   for (const file of files) {
     const filePath = path.join(backupDir, file);
     const stats = fs.statSync(filePath);
     const age = now - stats.mtimeMs;
-    
+
     if (age > retentionMs) {
       fs.rmSync(filePath, { recursive: true, force: true });
       console.log(`🗑️ Удалён старый бэкап: ${file}`);
@@ -679,41 +773,41 @@ async function checkLinkAvailability(link) {
         const originalFileName = path.basename(new URL(link.url).pathname) || 'file';
         const filePath = path.join(folder, originalFileName);
         const hasLocalCopy = fs.existsSync(filePath);
-        if (hasLocalCopy) {
-          return { ok: true, status: 200, source: 'local', error: err.message };
-        } else {
-          return { ok: false, status: 404, source: 'error', error: err.message };
-        }
+        return {
+          ok: hasLocalCopy,
+          status: hasLocalCopy ? 200 : 404,
+          error: err.message
+        };
       }
 
       if (result.status === 'downloaded' || result.status === 'not_modified') {
-        return { ok: true, status: 200, source: 'original' };
+        return { ok: true, status: 200 };
       } else {
         const originalFileName = path.basename(new URL(link.url).pathname) || 'file';
         const filePath = path.join(folder, originalFileName);
         const hasLocalCopy = fs.existsSync(filePath);
-        if (hasLocalCopy) {
-          return { ok: true, status: 200, source: 'local', error: result.error };
-        } else {
-          return { ok: false, status: result.statusCode || 404, source: 'error', error: result.error };
-        }
+        return {
+          ok: hasLocalCopy,
+          status: result.statusCode || (hasLocalCopy ? 200 : 404),
+          error: result.error
+        };
       }
     } else {
       try {
         const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 5000);
+        const timeout = setTimeout(() => controller.abort(), config.checkTimeout || 15000);
         const response = await fetch(link.url, {
           method: 'HEAD',
           signal: controller.signal
         });
         clearTimeout(timeout);
-        return { ok: response.ok, status: response.status, source: 'original' };
+        return { ok: response.ok, status: response.status };
       } catch (err) {
-        return { ok: false, status: 0, source: 'error', error: err.message };
+        return { ok: false, status: 0, error: err.message };
       }
     }
   } catch (err) {
-    return { ok: false, status: 0, source: 'error', error: err.message };
+    return { ok: false, status: 0, error: err.message };
   }
 }
 
@@ -741,17 +835,7 @@ async function checkAllLinks() {
         }
         tagUnavailable[link.tagId].push(link);
       }
-      // Если ссылка недоступна или используется локальная копия — отправляем уведомление
-     if (!status.ok) {
-	  if (!tagUnavailable[link.tagId]) {
-	    tagUnavailable[link.tagId] = [];
-	  }
-	  // Проверяем, есть ли уже эта ссылка в массиве
-	  const exists = tagUnavailable[link.tagId].some(l => l.id === link.id);
-	  if (!exists) {
-	    tagUnavailable[link.tagId].push(link);
-	  }
-    }
+
       results.push({ linkId: link.id, available: link.available, status: status.status });
     } catch (err) {
       console.error(`❌ Ошибка при проверке ссылки ${link.name}:`, err.message);
@@ -780,24 +864,43 @@ async function checkAllLinks() {
   return results;
 }
 
+// --- Функция обновления таймеров ---
+function updateTimers() {
+  if (checkTimer) clearInterval(checkTimer);
+  if (backupTimer) clearInterval(backupTimer);
+
+  const checkInterval = (config.checkIntervalMinutes || 60) * 60 * 1000;
+  checkTimer = setInterval(async () => {
+    await checkAllLinks();
+  }, checkInterval);
+
+  const backupInterval = (config.backupIntervalHours || 24) * 60 * 60 * 1000;
+  backupTimer = setInterval(async () => {
+    console.log('📦 Запуск автоматического бэкапа...');
+    await createBackup();
+  }, backupInterval);
+
+  console.log(`⏱️ Таймер проверки: ${config.checkIntervalMinutes || 60} мин, бэкапа: ${config.backupIntervalHours || 24} ч`);
+}
+
 // --- API маршруты ---
 
 // Авторизация
 app.post('/api/login', (req, res) => {
   const { login, password } = req.body;
   console.log(`Попытка входа: login=${login}`);
-  
+
   if (!login || !password) {
     return res.status(401).json({ error: 'Неверный логин или пароль' });
   }
-  
+
   if (checkUserPassword(login, password)) {
     const role = getUserRole(login);
     req.session.user = { login, role };
     console.log(`✅ Вход успешен: ${login} (${role})`);
     return res.json({ success: true, role });
   }
-  
+
   console.log(`❌ Неверный логин или пароль: ${login}`);
   res.status(401).json({ error: 'Неверный логин или пароль' });
 });
@@ -824,7 +927,7 @@ app.post('/api/change-password', async (req, res) => {
   if (!req.session.user) return res.status(401).json({ error: 'Unauthorized' });
   const { currentPassword, newPassword } = req.body;
   const login = req.session.user.login;
-  
+
   if (!currentPassword || !newPassword) {
     return res.status(400).json({ error: 'Необходимо ввести текущий и новый пароль' });
   }
@@ -837,7 +940,7 @@ app.post('/api/change-password', async (req, res) => {
   if (newPassword.length < 4) {
     return res.status(400).json({ error: 'Новый пароль должен быть не менее 4 символов' });
   }
-  
+
   const saltRounds = 10;
   config.users[login].passwordHash = bcrypt.hashSync(newPassword, saltRounds);
   saveConfig();
@@ -860,7 +963,7 @@ app.post('/api/users', (req, res) => {
   if (role !== USER_ROLES.ADMIN) {
     return res.status(403).json({ error: 'Доступ запрещён. Только администратор' });
   }
-  
+
   const { login, password, userRole } = req.body;
   if (!login || !password || !userRole) {
     return res.status(400).json({ error: 'Необходимо указать логин, пароль и роль' });
@@ -877,7 +980,7 @@ app.post('/api/users', (req, res) => {
   if (config.users && config.users[login]) {
     return res.status(400).json({ error: 'Пользователь с таким логином уже существует' });
   }
-  
+
   saveUser(login, password, userRole);
   res.json({ success: true, login, role: userRole });
 });
@@ -888,17 +991,17 @@ app.put('/api/users/:login', (req, res) => {
   if (role !== USER_ROLES.ADMIN) {
     return res.status(403).json({ error: 'Доступ запрещён. Только администратор' });
   }
-  
+
   const { login } = req.params;
   const { password, userRole } = req.body;
-  
+
   if (!config.users || !config.users[login]) {
     return res.status(404).json({ error: 'Пользователь не найден' });
   }
   if (login === 'admin' && userRole && userRole !== 'admin') {
     return res.status(400).json({ error: 'Нельзя изменить роль администратора' });
   }
-  
+
   if (password) {
     if (password.length < 4) {
       return res.status(400).json({ error: 'Пароль должен быть не менее 4 символов' });
@@ -922,7 +1025,7 @@ app.delete('/api/users/:login', (req, res) => {
   if (role !== USER_ROLES.ADMIN) {
     return res.status(403).json({ error: 'Доступ запрещён. Только администратор' });
   }
-  
+
   const { login } = req.params;
   if (login === 'admin') {
     return res.status(400).json({ error: 'Нельзя удалить администратора' });
@@ -930,13 +1033,13 @@ app.delete('/api/users/:login', (req, res) => {
   if (!config.users || !config.users[login]) {
     return res.status(404).json({ error: 'Пользователь не найден' });
   }
-  
+
   delete config.users[login];
   saveConfig();
   res.json({ success: true });
 });
 
-// --- Теги (CRUD) с проверкой ролей ---
+// --- Теги (CRUD) с проверкой ролей и валидацией имени ---
 app.get('/api/tags', (req, res) => {
   if (!req.session.user) return res.status(401).json({ error: 'Unauthorized' });
   res.json(data.tags);
@@ -950,6 +1053,13 @@ app.post('/api/tags', (req, res) => {
   }
   const { name, email } = req.body;
   if (!name || !email) return res.status(400).json({ error: 'Необходимо имя и email' });
+
+  // Валидация имени тега
+  const validation = validateTagName(name);
+  if (!validation.valid) {
+    return res.status(400).json({ error: validation.error });
+  }
+
   if (data.tags.some(t => t.name === name)) {
     return res.status(400).json({ error: 'Тег с таким именем уже существует' });
   }
@@ -969,6 +1079,13 @@ app.put('/api/tags/:id', (req, res) => {
   const { name, email } = req.body;
   const tag = getTagById(id);
   if (!tag) return res.status(404).json({ error: 'Тег не найден' });
+
+  // Валидация имени тега
+  const validation = validateTagName(name);
+  if (!validation.valid) {
+    return res.status(400).json({ error: validation.error });
+  }
+
   if (data.tags.some(t => t.name === name && t.id !== id)) {
     return res.status(400).json({ error: 'Тег с таким именем уже существует' });
   }
@@ -1005,7 +1122,7 @@ app.delete('/api/tags/:id', (req, res) => {
   res.json({ success: true });
 });
 
-// --- Ссылки (CRUD) с проверкой ролей ---
+// --- Ссылки (CRUD) с проверкой ролей и валидацией URL ---
 app.get('/api/links', (req, res) => {
   if (!req.session.user) return res.status(401).json({ error: 'Unauthorized' });
   const { tagId } = req.query;
@@ -1022,6 +1139,12 @@ app.post('/api/links', (req, res) => {
   }
   const { name, url, tagId, isFile } = req.body;
   if (!name || !url || !tagId) return res.status(400).json({ error: 'Необходимо имя, URL и тег' });
+
+  // Валидация URL
+  if (!validator.isURL(url, { protocols: ['http','https'], require_protocol: true })) {
+    return res.status(400).json({ error: 'Некорректный URL' });
+  }
+
   const tag = getTagById(tagId);
   if (!tag) return res.status(400).json({ error: 'Тег не найден' });
   if (data.links.some(l => l.name === name && l.tagId === tagId)) {
@@ -1050,7 +1173,6 @@ app.post('/api/links', (req, res) => {
         newLink.available = status.ok;
         newLink.lastChecked = new Date().toISOString();
         saveData();
-        console.log(`Фоновая проверка для ${newLink.name}: доступен=${status.ok}`);
       });
     }
   } catch (e) {
@@ -1071,6 +1193,12 @@ app.put('/api/links/:id', (req, res) => {
   const { name, url, tagId, isFile } = req.body;
   const link = getLinkById(id);
   if (!link) return res.status(404).json({ error: 'Ссылка не найдена' });
+
+  // Валидация URL
+  if (!validator.isURL(url, { protocols: ['http','https'], require_protocol: true })) {
+    return res.status(400).json({ error: 'Некорректный URL' });
+  }
+
   if (data.links.some(l => l.name === name && l.tagId === tagId && l.id !== id)) {
     return res.status(400).json({ error: 'Ссылка с таким именем уже существует в этом теге' });
   }
@@ -1153,6 +1281,74 @@ app.get('/api/links/check-all', async (req, res) => {
   if (!req.session.user) return res.status(401).json({ error: 'Unauthorized' });
   const results = await checkAllLinks();
   res.json(results);
+});
+
+// --- Прогресс-бар для проверки всех ссылок (SSE) ---
+app.get('/api/links/check-all-stream', async (req, res) => {
+  if (!req.session.user) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+
+  console.log('✅ SSE: Запрос на проверку всех ссылок');
+
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    'Connection': 'keep-alive',
+  });
+  res.flushHeaders();
+
+  const total = data.links.length;
+  res.write(`data: ${JSON.stringify({ progress: 0, processed: 0, total, status: 'started' })}\n\n`);
+
+  let processed = 0;
+  const tagUnavailable = {};
+
+  try {
+    for (const link of data.links) {
+      try {
+        const status = await checkLinkAvailability(link);
+        link.available = status.ok;
+        link.lastChecked = new Date().toISOString();
+        link.lastStatus = status.status || 'unknown';
+
+        if (!link.isFile) {
+          generateRedirectFile(link);
+        }
+
+        if (!status.ok) {
+          if (!tagUnavailable[link.tagId]) {
+            tagUnavailable[link.tagId] = [];
+          }
+          tagUnavailable[link.tagId].push(link);
+        }
+
+        processed++;
+        const progress = Math.round((processed / total) * 100);
+        res.write(`data: ${JSON.stringify({ progress, processed, total, linkName: link.name })}\n\n`);
+      } catch (err) {
+        console.error(`Ошибка проверки ссылки ${link.name}:`, err);
+        // Продолжаем проверку
+      }
+    }
+  } catch (err) {
+    console.error('Ошибка в потоке проверки:', err);
+  }
+
+  res.write(`data: ${JSON.stringify({ progress: 100, processed, total, done: true })}\n\n`);
+  console.log('✅ SSE: Проверка завершена');
+
+  if (Object.keys(tagUnavailable).length > 0) {
+    for (const [tagId, links] of Object.entries(tagUnavailable)) {
+      const tag = getTagById(tagId);
+      if (tag && tag.email) {
+        await sendUnavailableNotification(tag, links);
+      }
+    }
+  }
+
+  saveData();
+  res.end();
 });
 
 // --- Заглушка (получение и сохранение) ---
@@ -1271,6 +1467,7 @@ app.get('/api/config', (req, res) => {
     baseUrl: config.baseUrl,
     checkIntervalMinutes: config.checkIntervalMinutes,
     notificationIntervalHours: config.notificationIntervalHours,
+    checkTimeout: config.checkTimeout || 15000,
     adminEmail: config.adminEmail,
     backupIntervalHours: config.backupIntervalHours,
     backupRetentionDays: config.backupRetentionDays,
@@ -1292,6 +1489,7 @@ app.put('/api/config', (req, res) => {
   if (adminEmail !== undefined) config.adminEmail = adminEmail;
   if (backupIntervalHours !== undefined) config.backupIntervalHours = backupIntervalHours;
   if (backupRetentionDays !== undefined) config.backupRetentionDays = backupRetentionDays;
+  if (checkTimeout !== undefined) config.checkTimeout = checkTimeout;
   if (smtp !== undefined) {
     config.smtp = {
       host: smtp.host || config.smtp?.host || '',
@@ -1306,6 +1504,7 @@ app.put('/api/config', (req, res) => {
     };
   }
   saveConfig();
+  updateTimers(); // <-- обновляем таймеры после сохранения конфига
   res.json({ success: true });
 });
 
@@ -1404,26 +1603,88 @@ app.get('/redirect/:linkId', (req, res) => {
 });
 
 // --- Запуск периодической проверки и бэкапа ---
-const checkInterval = (config.checkIntervalMinutes || 60) * 60 * 1000;
-setInterval(async () => {
-  await checkAllLinks();
-}, checkInterval);
+updateTimers();
 
-const backupInterval = (config.backupIntervalHours || 24) * 60 * 60 * 1000;
-setInterval(async () => {
-  console.log('📦 Запуск автоматического бэкапа...');
-  await createBackup();
-}, backupInterval);
+// --- Глобальный обработчик ошибок (скрывает стек в production) ---
+app.use((err, req, res, next) => {
+  console.error('❌ Ошибка:', err);
+  const status = err.status || 500;
+  const message = process.env.NODE_ENV === 'production'
+    ? 'Внутренняя ошибка сервера'
+    : err.message || 'Ошибка';
+  res.status(status).json({ error: message });
+});
 
-(async function initCheck() {
-  console.log('Первоначальная проверка ссылок...');
-  await checkAllLinks();
-})();
+// Запуск проверки всех ссылок (асинхронно, с сохранением прогресса)
+app.get('/api/links/check-all-start', async (req, res) => {
+  if (!req.session.user) return res.status(401).json({ error: 'Unauthorized' });
 
-setTimeout(async () => {
-  console.log('📦 Создание начального бэкапа...');
-  await createBackup();
-}, 5000);
+  const sessionId = req.sessionID;
+  const total = data.links.length;
+  progressStore[sessionId] = { progress: 0, processed: 0, total, done: false };
+
+  // Запускаем проверку в фоне
+  (async () => {
+    let processed = 0;
+    const tagUnavailable = {};
+
+    for (const link of data.links) {
+      try {
+        const status = await checkLinkAvailability(link);
+        link.available = status.ok;
+        link.lastChecked = new Date().toISOString();
+        link.lastStatus = status.status || 'unknown';
+
+        if (!link.isFile) {
+          generateRedirectFile(link);
+        }
+
+        if (!status.ok) {
+          if (!tagUnavailable[link.tagId]) {
+            tagUnavailable[link.tagId] = [];
+          }
+          tagUnavailable[link.tagId].push(link);
+        }
+
+        processed++;
+        const progress = Math.round((processed / total) * 100);
+        progressStore[sessionId] = { progress, processed, total, done: false };
+      } catch (err) {
+        console.error(`Ошибка проверки ссылки ${link.name}:`, err);
+      }
+    }
+
+    // Проверка завершена
+    progressStore[sessionId] = { progress: 100, processed, total, done: true };
+
+    // Отправка уведомлений
+    if (Object.keys(tagUnavailable).length > 0) {
+      for (const [tagId, links] of Object.entries(tagUnavailable)) {
+        const tag = getTagById(tagId);
+        if (tag && tag.email) {
+          await sendUnavailableNotification(tag, links);
+        }
+      }
+    }
+
+    saveData();
+
+    // Удаляем прогресс через 10 секунд после завершения
+    setTimeout(() => {
+      delete progressStore[sessionId];
+    }, 10000);
+  })();
+
+  res.json({ started: true });
+});
+
+// Получение текущего прогресса
+app.get('/api/links/check-all-progress', (req, res) => {
+  if (!req.session.user) return res.status(401).json({ error: 'Unauthorized' });
+  const sessionId = req.sessionID;
+  const progress = progressStore[sessionId] || { progress: 0, processed: 0, total: 0, done: false };
+  res.json(progress);
+});
 
 app.listen(PORT, () => {
   console.log(`✅ Сервер запущен на порту ${PORT}`);

@@ -43,11 +43,17 @@
   const linkIsFile = $('#linkIsFile');
   const saveLinkBtn = $('#saveLinkBtn');
 
-  const qrModal = $('#qrModal');
-  const qrContainer = $('#qrcode');
-  const redirectUrlDisplay = $('#redirectUrlDisplay');
-  const downloadQrBtn = $('#downloadQrBtn');
-  const downloadHtmlBtn = $('#downloadHtmlBtn');
+//  const qrModal = $('#qrModal');
+//  const qrContainer = $('#qrcode');
+const qrModal = $('#qrModal');
+const qrCodeContainer = $('#qrCodeContainer');   // новый контейнер
+const redirectUrlDisplay = $('#redirectUrlDisplay');
+//  const redirectUrlDisplay = $('#redirectUrlDisplay');
+//  const downloadQrBtn = $('#downloadQrBtn');
+//  const downloadHtmlBtn = $('#downloadHtmlBtn');
+const progressContainer = $('#progressContainer');
+const progressBar = $('#progressBar');
+const progressText = $('#progressText');
 
   const testResultModal = $('#testResultModal');
   const testResultContent = $('#testResultContent');
@@ -94,6 +100,7 @@
   const saveSettingsBtn = $('#saveSettingsBtn');
   const testEmailInput = $('#testEmailInput');
   const testEmailBtn = $('#testEmailBtn');
+  const settingsCheckTimeout = $('#settingsCheckTimeout');
 
   // Новые поля настроек
   const settingsAdminEmail = $('#settingsAdminEmail');
@@ -132,6 +139,7 @@
   let tags = [];
   let links = [];
 
+  let qrStylingInstance = null;
   // --- Применение ограничений по роли ---
   function applyRoleRestrictions(role) {
     const isAdmin = role === 'admin';
@@ -534,45 +542,94 @@
 
   // --- QR ---
   function showQrForLink(linkId) {
-    const link = links.find(l => l.id === linkId);
-    if (!link) return;
-    currentLinkIdForQr = linkId;
-    const baseUrl = window.location.origin;
-    const redirectUrl = `${baseUrl}/redirect/${link.id}`;
-    redirectUrlDisplay.textContent = redirectUrl;
+  const link = links.find(l => l.id === linkId);
+  if (!link) return;
+  currentLinkIdForQr = linkId;
+  const baseUrl = window.location.origin;
+  const redirectUrl = `${baseUrl}/redirect/${link.id}`;
+  redirectUrlDisplay.textContent = redirectUrl;
 
-    qrContainer.innerHTML = '';
-    new QRCode(qrContainer, {
-      text: redirectUrl,
-      width: 256,
-      height: 256,
-      colorDark: '#000000',
-      colorLight: '#ffffff',
-      correctLevel: QRCode.CorrectLevel.H
-    });
+  // Если экземпляр уже существует — обновляем данные
+  if (qrStylingInstance) {
+    qrStylingInstance.update({ data: redirectUrl });
+    qrStylingInstance.append(qrCodeContainer);
     qrModal.classList.remove('hidden');
+    return;
   }
 
-  function downloadQr() {
-    const canvas = qrContainer.querySelector('canvas');
-    if (!canvas) { alert('QR-код не сгенерирован'); return; }
-    const a = document.createElement('a');
-    a.download = `qr-${currentLinkIdForQr}.png`;
-    a.href = canvas.toDataURL('image/png');
-    a.click();
-  }
+  // Иначе создаём новый
+  const dotsColor = document.getElementById('qrDotsColor').value;
+  const bgColor = document.getElementById('qrBgColor').value;
+  const dotsType = document.getElementById('qrDotsType').value;
+  const transparent = document.getElementById('qrTransparentBg').checked;
 
-  function downloadHtml() {
-    const link = links.find(l => l.id === currentLinkIdForQr);
-    if (!link) return;
-    const redirectUrl = `${window.location.origin}/redirect/${link.id}`;
-    const a = document.createElement('a');
-    a.href = redirectUrl;
-    a.download = `redirect-${link.name}.html`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-  }
+  qrStylingInstance = new QRCodeStyling({
+    width: 256,
+    height: 256,
+    type: "canvas",
+    data: redirectUrl,
+    dotsOptions: {
+      color: dotsColor,
+      type: dotsType
+    },
+    backgroundOptions: {
+      color: transparent ? 'transparent' : bgColor
+    }
+  });
+
+  qrStylingInstance.append(qrCodeContainer);
+  qrModal.classList.remove('hidden');
+}
+
+// Обновление QR при изменении стилей
+document.getElementById('qrTransparentBg').addEventListener('change', function() {
+  document.getElementById('updateQrBtn').click();
+});
+
+document.getElementById('updateQrBtn').addEventListener('click', function() {
+  if (!qrStylingInstance) return;
+  const dotsColor = document.getElementById('qrDotsColor').value;
+  const bgColor = document.getElementById('qrBgColor').value;
+  const dotsType = document.getElementById('qrDotsType').value;
+  const transparent = document.getElementById('qrTransparentBg').checked;
+
+  qrStylingInstance.update({
+    dotsOptions: { color: dotsColor, type: dotsType },
+    backgroundOptions: { color: transparent ? 'transparent' : bgColor }
+  });
+});
+
+// Загрузка логотипа
+document.getElementById('qrLogoFile').addEventListener('change', function(e) {
+  if (!qrStylingInstance) return;
+  const file = e.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = function(event) {
+    const img = new Image();
+    img.onload = function() {
+      qrStylingInstance.update({
+        image: event.target.result,
+        imageOptions: {
+          hideBackgroundDots: true,
+          imageSize: 0.25,
+          margin: 4
+        }
+      });
+    };
+    img.src = event.target.result;
+  };
+  reader.readAsDataURL(file);
+});
+
+// Скачивание QR
+document.getElementById('downloadQrStylingBtn').addEventListener('click', function() {
+  if (!qrStylingInstance) return;
+  qrStylingInstance.download({
+    name: `qr-${currentLinkIdForQr}`,
+    extension: "png"
+  });
+});
 
   // --- Проверка ссылок ---
   async function checkLink(linkId) {
@@ -593,6 +650,62 @@
       alert(e.message);
     }
   }
+
+async function checkAllWithProgress() {
+  const btn = checkAllBtn;
+  const originalText = btn.textContent; // содержит "🔄 Проверить все ссылки"
+  const originalBg = btn.style.background;
+
+  btn.disabled = true;
+  btn.textContent = '🔄 Запуск...';
+  btn.style.color = '#fff';
+
+  try {
+    const startRes = await fetch('/api/links/check-all-start', { credentials: 'include' });
+    if (!startRes.ok) throw new Error('Не удалось запустить проверку');
+    await startRes.json();
+
+    let done = false;
+    let progress = 0;
+    let processed = 0;
+    let total = 0;
+
+    while (!done) {
+      const res = await fetch('/api/links/check-all-progress', { credentials: 'include' });
+      if (!res.ok) throw new Error('Ошибка получения прогресса');
+      const data = await res.json();
+      progress = data.progress || 0;
+      processed = data.processed || 0;
+      total = data.total || 0;
+      done = data.done || false;
+
+      btn.textContent = `🔄 Проверка: ${progress}% (${processed}/${total})`;
+      btn.style.background = `linear-gradient(to right, #3498db ${progress}%, #dce1e8 ${progress}%)`;
+
+      if (done) break;
+      await new Promise(resolve => setTimeout(resolve, 500));
+    }
+
+    btn.textContent = '✅ Ok';
+    setTimeout(() => {
+      btn.textContent = originalText; // восстанавливаем "🔄 Проверить все ссылки"
+      btn.style.background = originalBg || '';
+      btn.style.color = '';
+      btn.disabled = false;
+      loadData();
+    }, 1500);
+
+  } catch (err) {
+    console.error('Ошибка проверки:', err);
+    btn.textContent = '❌ Ошибка';
+    setTimeout(() => {
+      btn.textContent = originalText;
+      btn.style.background = originalBg || '';
+      btn.style.color = '';
+      btn.disabled = false;
+    }, 2000);
+  }
+}
 
   // --- Глобальный шаблон (Jodit с iframe) ---
   async function loadTemplate() {
@@ -863,6 +976,7 @@
       const config = await apiFetch('/api/config');
       settingsBaseUrl.value = config.baseUrl || '';
       settingsCheckInterval.value = config.checkIntervalMinutes || 60;
+      settingsCheckTimeout.value = config.checkTimeout || 15000;
       settingsNotificationInterval.value = config.notificationIntervalHours || 24;
       settingsSmtpHost.value = config.smtp?.host || '';
       settingsSmtpPort.value = config.smtp?.port || 587;
@@ -888,6 +1002,7 @@
     const config = {
       baseUrl: settingsBaseUrl.value.trim(),
       checkIntervalMinutes: parseInt(settingsCheckInterval.value) || 60,
+      checkTimeout: parseInt(settingsCheckTimeout.value) || 15000,
       notificationIntervalHours: parseInt(settingsNotificationInterval.value) || 24,
       adminEmail: settingsAdminEmail.value.trim(),
       backupIntervalHours: parseInt(settingsBackupInterval.value) || 24,
@@ -929,6 +1044,7 @@
       const config = {
         baseUrl: settingsBaseUrl.value.trim(),
         checkIntervalMinutes: parseInt(settingsCheckInterval.value) || 60,
+	checkTimeout: parseInt(settingsCheckTimeout.value) || 15000,
         notificationIntervalHours: parseInt(settingsNotificationInterval.value) || 24,
         adminEmail: settingsAdminEmail.value.trim(),
         backupIntervalHours: parseInt(settingsBackupInterval.value) || 24,
@@ -1281,12 +1397,16 @@
   addLinkBtn.addEventListener('click', () => openLinkModal());
   saveTagBtn.addEventListener('click', saveTag);
   saveLinkBtn.addEventListener('click', saveLink);
-  downloadQrBtn.addEventListener('click', downloadQr);
-  downloadHtmlBtn.addEventListener('click', downloadHtml);
-  checkAllBtn.addEventListener('click', checkAll);
+//  downloadQrBtn.addEventListener('click', downloadQr);
+//  downloadHtmlBtn.addEventListener('click', downloadHtml);
+//  checkAllBtn.addEventListener('click', checkAll);
+checkAllBtn.addEventListener('click', checkAllWithProgress);
+
   exportDataBtn.addEventListener('click', exportData);
   importDataBtn.addEventListener('click', importData);
-  helpBtn.addEventListener('click', async () => {
+let helpShadowRoot = null;
+
+helpBtn.addEventListener('click', async () => {
   const helpModal = document.getElementById('helpModal');
   if (!helpModal) return;
   helpModal.style.display = 'flex';
@@ -1294,34 +1414,26 @@
 
   const helpContent = document.getElementById('helpContent');
   if (!helpContent) return;
-  // Если уже загружено, не перезагружаем (но аккордеон уже инициализирован)
-  if (helpContent.dataset.loaded === 'true') {
-    // Аккордеон уже работает, ничего не делаем
-    return;
-  }
+
+  // Если shadow root уже создан, ничего не делаем
+  if (helpShadowRoot) return;
 
   try {
     const response = await fetch('/help.html');
     if (!response.ok) throw new Error('Не удалось загрузить справку');
     const html = await response.text();
-    helpContent.innerHTML = html;
-    helpContent.dataset.loaded = 'true';
 
-    // --- Инициализация аккордеона ---
-    const headers = helpContent.querySelectorAll('.accordion-header');
+    // Создаём shadow root
+    helpShadowRoot = helpContent.attachShadow({ mode: 'open' });
+    // Вставляем содержимое
+    helpShadowRoot.innerHTML = html;
+
+    // Инициализация аккордеона внутри shadow root
+    const headers = helpShadowRoot.querySelectorAll('.accordion-header');
     headers.forEach(header => {
       header.addEventListener('click', function(e) {
         const item = this.parentElement;
-        // Переключаем класс open
         item.classList.toggle('open');
-        // Закрываем все остальные (если нужно аккордеон с одним открытым блоком)
-        // Раскомментируйте следующие строки, если хотите, чтобы открывался только один блок:
-        /*
-        const allItems = helpContent.querySelectorAll('.accordion-item');
-        allItems.forEach(it => {
-          if (it !== item) it.classList.remove('open');
-        });
-        */
       });
     });
   } catch (e) {

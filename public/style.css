@@ -330,3 +330,99 @@ body {
 #helpBtn {
   margin-left: auto;
 }
+#qrCodeContainer canvas,
+#qrCodeContainer svg {
+  max-width: 100%;
+  height: auto;
+}
+/* Стили для редактора QR */
+.qr-controls {
+  background: #f8f9fa;
+  padding: 15px;
+  border-radius: 8px;
+  margin-bottom: 15px;
+}
+.qr-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 15px 20px;
+  align-items: center;
+  margin-bottom: 10px;
+}
+.qr-row:last-child {
+  margin-bottom: 0;
+}
+.qr-control-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.qr-control-group label {
+  font-size: 13px;
+  font-weight: 500;
+  color: #333;
+  white-space: nowrap;
+}
+.qr-control-group input[type="color"] {
+  width: 40px;
+  height: 32px;
+  padding: 2px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  cursor: pointer;
+  background: #fff;
+}
+.qr-control-group select {
+  padding: 4px 8px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  background: #fff;
+  font-size: 13px;
+}
+.qr-control-file input[type="file"] {
+  font-size: 13px;
+  padding: 4px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  background: #fff;
+}
+.qr-control-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.qr-control-checkbox input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  cursor: pointer;
+}
+.qr-control-checkbox label {
+  cursor: pointer;
+  font-size: 14px;
+}
+@media (max-width: 600px) {
+  .qr-row {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+  }
+  .qr-control-group {
+    justify-content: space-between;
+  }
+}
+#checkAllBtn {
+  min-width: 220px; /* или точное значение, например 200px, подберите под свой макет */
+  text-align: center;
+  white-space: nowrap; /* текст не переносится */
+  transition: background 0.3s ease; /* плавное изменение фона */
+  font-size: 0.9em;
+}
+#helpBtn {
+  background: #17a2b8;
+  color: #fff;
+  border-color: #17a2b8;
+}
+#helpBtn:hover {
+  background: #138496;
+  border-color: #117a8b;
+}

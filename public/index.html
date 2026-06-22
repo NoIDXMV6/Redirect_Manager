@@ -7,6 +7,7 @@
   <title>Панель управления ссылками</title>
   <link rel="stylesheet" href="/style.css">
   <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/qr-code-styling@1.5.0/lib/qr-code-styling.js"></script>
   <!-- Jodit Editor -->
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/jodit@4.2.15/es2021/jodit.min.css">
   <script src="https://cdn.jsdelivr.net/npm/jodit@4.2.15/es2021/jodit.min.js"></script>
@@ -30,10 +31,17 @@
 
     <!-- Панель управления -->
     <div id="dashboard" class="hidden">
-      <h1><img src="/favicon.svg" alt="Redirect Manager" style="height:1.2em; vertical-align:middle; margin-right:10px;"> Панель управления ссылками</h1> <br>
+      <h1><img src="/favicon.svg" alt="Redirect Manager" style="height:1.2em; vertical-align:middle; margin-right:10px;"> Панель управления ссылками</h1> <br> 
+<!-- <h1><img src="/favicon.svg" alt="Redirect Manager" width="25" height="25" style="vertical-align:middle; margin-right:10px;"> Панель управления ссылками</h1> <br> -->
 <div class="toolbar">
   <!-- Основные кнопки (всегда видны) -->
-  <button class="btn btn-primary" id="checkAllBtn">Проверить все ссылки</button>
+<div id="progressContainer" style="display:none; margin:10px 0;">
+  <div style="background:#f0f0f0; border-radius:4px; height:22px; overflow:hidden; width:100%;">
+    <div id="progressBar" style="background:#3498db; height:100%; width:0%; transition:width 0.3s ease;"></div>
+  </div>
+  <div id="progressText" style="margin-top:5px; font-size:14px; color:#555;">Подготовка...</div>
+</div>
+  <button class="btn btn-primary" id="checkAllBtn">🔄 Проверить все ссылки</button>
   <!-- <button class="btn btn-success btn-sm" id="addTagBtn">+ Тег</button>
   <button class="btn btn-success btn-sm" id="addLinkBtn">+ Ссылка</button> -->
 
@@ -139,23 +147,61 @@
   </div>
 </div>
 
-    <!-- QR -->
-    <div id="qrModal" class="modal hidden">
-      <div class="modal-content">
-        <span class="modal-close" data-modal="qrModal">&times;</span>
-        <h3>QR-код для ссылки</h3>
-        <div class="qr-container">
-          <div id="qrcode"></div>
-        </div>
-        <div class="flex" style="justify-content:center; gap:10px;">
-          <button class="btn btn-success" id="downloadQrBtn">Скачать QR (PNG)</button>
-          <button class="btn btn-primary" id="downloadHtmlBtn">Скачать HTML-редирект</button>
-        </div>
-        <p style="font-size:12px; color:#777; margin-top:10px;">
-          Ссылка для редиректа: <span id="redirectUrlDisplay" style="word-break:break-all;"></span>
-        </p>
-      </div>
+<!-- QR -->
+<div id="qrModal" class="modal hidden">
+  <div class="modal-content">
+    <span class="modal-close" data-modal="qrModal">&times;</span>
+    <h3>QR-код для ссылки</h3>
+
+    <div id="qrCodeContainer" style="display:flex; justify-content:center; margin:15px 0;"></div>
+
+    <!-- Панель управления стилями -->
+    <div class="qr-controls">
+  <!-- Первая строка: цвета и прозрачность -->
+  <div class="qr-row">
+    <div class="qr-control-group">
+      <label>Цвет точек:</label>
+      <input type="color" id="qrDotsColor" value="#000000">
     </div>
+    <div class="qr-control-group">
+      <label>Цвет фона:</label>
+      <input type="color" id="qrBgColor" value="#ffffff">
+    </div>
+    <div class="qr-control-group qr-control-checkbox">
+      <input type="checkbox" id="qrTransparentBg">
+      <label for="qrTransparentBg">Прозрачный фон</label>
+    </div>
+  </div>
+  <!-- Вторая строка: форма точек и логотип -->
+  <div class="qr-row">
+    <div class="qr-control-group">
+      <label>Форма точек:</label>
+      <select id="qrDotsType">
+        <option value="square">Квадрат</option>
+        <option value="rounded">Скруглённый</option>
+        <option value="dots">Точки</option>
+        <option value="classy">Классический</option>
+        <option value="classy-rounded">Скруглённый классический</option>
+      </select>
+    </div>
+    <div class="qr-control-group qr-control-file">
+      <label>Логотип:</label>
+      <input type="file" id="qrLogoFile" accept="image/png, image/jpeg, image/svg+xml">
+    </div>
+  </div>
+</div>
+
+    <div style="display:flex; gap:10px; flex-wrap:wrap; justify-content:center; margin-top:10px;">
+      <button class="btn btn-primary" id="updateQrBtn">Обновить QR</button>
+      <button class="btn btn-success" id="downloadQrStylingBtn">Скачать QR (PNG)</button>
+      <button class="btn btn-secondary" data-modal="qrModal">Закрыть</button>
+    </div>
+
+    <p style="font-size:12px; color:#777; margin-top:10px;">
+      Ссылка для редиректа: <span id="redirectUrlDisplay" style="word-break:break-all;"></span>
+    </p>
+  </div>
+</div>
 
     <!-- Редактор глобального шаблона -->
     <div id="templateModal" class="modal hidden">
@@ -265,6 +311,11 @@
       <input type="number" id="settingsCheckInterval" value="60">
     </div>
     <div class="form-group">
+  <label>Таймаут проверки ссылок (миллисекунды)</label>
+  <input type="number" id="settingsCheckTimeout" value="15000" step="1000">
+  <small style="color:#999; display:block; margin-top:4px;">Увеличьте для медленно загружаемых сайтов (рекомендуется 15000–30000)</small>
+</div>
+    <div class="form-group">
       <label>Интервал повторных уведомлений (часы)</label>
       <input type="number" id="settingsNotificationInterval" value="24">
       <small style="color:#999; display:block; margin-top:4px;">Минимальный интервал между повторными письмами для одной ссылки</small>
@@ -340,10 +391,9 @@
 <div id="helpModal" class="modal hidden">
   <div class="modal-content" style="max-width:800px;">
     <span class="modal-close" data-modal="helpModal">&times;</span>
-    <h3>Справка</h3>
+<!--    <h3>Справка</h3> -->
     <div id="helpContent" style="margin-top:15px; max-height:70vh; overflow-y:auto; padding-right:10px;">
-      <!-- сюда будет загружаться help.html -->
-      <p style="color:#999;">Загрузка справки...</p>
+      <!-- Сюда через shadow DOM будет вставлено содержимое help.html -->
     </div>
     <button class="btn btn-secondary" data-modal="helpModal" style="margin-top:15px;">Закрыть</button>
   </div>
@@ -418,28 +468,6 @@
 </div>
 
   <script src="/main.js"></script>
-<script>
-  // Управление выпадающими меню
-  document.addEventListener('DOMContentLoaded', function() {
-    const dropdowns = document.querySelectorAll('.dropdown');
-    dropdowns.forEach(dropdown => {
-      const btn = dropdown.querySelector('.dropdown-btn');
-      if (!btn) return;
-      btn.addEventListener('click', function(e) {
-        e.stopPropagation();
-        // Закрываем все остальные меню
-        dropdowns.forEach(d => {
-          if (d !== dropdown) d.classList.remove('open');
-        });
-        dropdown.classList.toggle('open');
-      });
-    });
-
-    // Закрытие при клике вне любого меню
-    document.addEventListener('click', function() {
-      dropdowns.forEach(d => d.classList.remove('open'));
-    });
-  });
-</script>
+  <script src="/dropdown.js"></script>
 </body>
 </html>

@@ -37,8 +37,8 @@
   <!-- <button class="btn btn-success btn-sm" id="addTagBtn">+ Тег</button>
   <button class="btn btn-success btn-sm" id="addLinkBtn">+ Ссылка</button> -->
 
-  <!-- Выпадающее меню "Данные" (экспорт/импорт, шаблон) -->
-  <div class="dropdown">
+  <!-- Выпадающее меню "Данные" (админ + пользователь) -->
+  <div class="dropdown user-only">
     <button class="btn btn-secondary dropdown-btn">📊 Данные</button>
     <div class="dropdown-content">
       <button class="btn btn-success admin-only user-only" id="exportDataBtn">Экспорт JSON</button>
@@ -49,8 +49,8 @@
   </div>
 
   <!-- Выпадающее меню "Администрирование" (только админ) -->
-  <div class="dropdown">
-    <button class="btn btn-secondary dropdown-btn admin-only">⚙ Администрирование</button>
+  <div class="dropdown admin-only">
+    <button class="btn btn-secondary dropdown-btn">⚙ Администрирование</button>
     <div class="dropdown-content">
       <button class="btn btn-warning admin-only" id="settingsBtn">Настройки</button>
       <button class="btn btn-warning admin-only" id="emailTemplatesBtn">✉ Шаблоны писем</button>
@@ -63,7 +63,7 @@
   <button class="btn btn-warning user-only" id="changePasswordBtn">🔑 Сменить пароль</button>
 
   <!-- Справка (для всех) -->
-  <button class="btn btn-success" id="helpBtn">❓ Справка</button>
+  <button class="btn btn-info" id="helpBtn">❓ Справка</button>
 
   <!-- Выход (для всех) -->
   <button class="btn btn-danger" id="logoutBtn">Выйти</button>
